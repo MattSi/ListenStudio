@@ -1,0 +1,28 @@
+# 用 GitHub 的 Mac 机器打包 ListenStudio.app（入口 app.py），不需要自己有 Mac。
+# 推到 GitHub 后，在仓库的 Actions 页面点 "Build Mac app" → Run workflow，
+# 跑完在这次运行的 Artifacts 里下载 zip。
+name: Build Mac app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15          # Apple 芯片（M1/M2/M3/M4）
+          - runner: macos-15-intel    # Intel 芯片
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: bash build_mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ListenStudio-${{ matrix.runner }}
+          path: dist/ListenStudio-mac-*.zip

@@ -1,0 +1,5 @@
+av
+numpy
+sounddevice
+pillow
+tkinterdnd2
