@@ -41,7 +41,6 @@ DROP_HINT = "把音频或视频文件拖到这里（或点这里选择），然�
 NO_WINDOW = intensive_listening.NO_WINDOW   # hide the helper Python's console on Windows
 REC_DIR = app_paths.RECORDINGS_DIR
 REC_LENGTHS = (60, 90)   # seconds
-DEFAULT_MIC = "系统默认麦克风"
 
 
 # Run by an external Python that has Whisper (when this one doesn't, e.g. the packaged .app):
@@ -287,25 +286,7 @@ class Recorder:
     def time_up(self):
         return self.active and self.frames >= self.limit * self.SR
 
-    @staticmethod
-    def input_devices():
-        """[(name, index), ...] of microphones. Windows lists each mic once per host API
-        (MME / DirectSound / WASAPI ...), so only the default host API's are kept."""
-        import sounddevice as sd
-        api = sd.default.hostapi
-        devs = [d for d in sd.query_devices() if d["max_input_channels"] > 0]
-        # MME cuts names at 31 chars; borrow the full name from another host API
-        full = [d["name"] for d in devs if d["hostapi"] != api]
-        out = []
-        for d in devs:
-            if d["hostapi"] != api or "Sound Mapper" in d["name"]:  # Mapper = the default mic
-                continue
-            name = next((f for f in full if f.startswith(d["name"])), d["name"])
-            out.append((name, d["index"]))
-        return out
-
-    def start(self, seconds, path, device=None):
-        """device: a sounddevice input index, None = the system default microphone."""
+    def start(self, seconds, path):
         import sounddevice as sd
         self._chunks, self.frames = [], 0
         self.limit, self.path = seconds, path
@@ -320,7 +301,7 @@ class Recorder:
                 raise sd.CallbackStop
 
         self._stream = sd.RawInputStream(samplerate=self.SR, channels=1, dtype="int16",
-                                         device=device, callback=callback)
+                                         callback=callback)
         self._stream.start()
 
     def finish(self):
@@ -396,18 +377,6 @@ class App:
         for w in (self.drop, parent):
             w.drop_target_register(DND_FILES)
             w.dnd_bind("<<Drop>>", self.on_drop)
-
-        # --- microphone ---
-        mic = ttk.Frame(parent, padding=(P, P, P, 0))
-        mic.pack(fill="x")
-        ttk.Label(mic, text="麦克风").pack(side="left")
-        self.mic_var = tk.StringVar(value=DEFAULT_MIC)
-        self.mic_box = ttk.Combobox(mic, textvariable=self.mic_var, state="readonly")
-        self.mic_box.pack(side="left", fill="x", expand=True, padx=(6, 6))
-        self.mic_refresh = ttk.Button(mic, text="刷新", width=6, command=self._load_mics)
-        self.mic_refresh.pack(side="left")
-        self._mics = {}            # combobox label -> sounddevice index
-        self._load_mics()
 
         # --- recorder ---
         rec = ttk.Frame(parent, padding=(P, P, P, 0))
@@ -507,8 +476,7 @@ class App:
         self.player.stop()          # don't record our own playback
         name = time.strftime("rec_%Y%m%d_%H%M%S.wav")
         try:
-            self.recorder.start(self.rec_len.get(), os.path.join(REC_DIR, name),
-                                device=self._mics.get(self.mic_var.get()))
+            self.recorder.start(self.rec_len.get(), os.path.join(REC_DIR, name))
         except Exception as e:
             messagebox.showerror("录音失败", f"打不开麦克风：\n{e}")
             return
@@ -531,19 +499,6 @@ class App:
         if self.auto_tx.get():
             self.start()
 
-    def _load_mics(self):
-        """(Re)fill the microphone list, e.g. after plugging in a headset."""
-        try:
-            devices = Recorder.input_devices()
-        except Exception:          # sounddevice missing / no audio system
-            devices = []
-        self._mics = {DEFAULT_MIC: None}
-        for name, idx in devices:
-            self._mics.setdefault(name, idx)
-        self.mic_box["values"] = list(self._mics)
-        if self.mic_var.get() not in self._mics:   # the chosen mic was unplugged
-            self.mic_var.set(DEFAULT_MIC)
-
     def _refresh_recorder(self):
         r = self.recorder
         total = r.limit if r.active else self.rec_len.get()
@@ -554,8 +509,6 @@ class App:
                             state="disabled" if self._busy and not r.active else "normal")
         for rb in self.rec_radios:
             rb.config(state="disabled" if r.active else "normal")
-        self.mic_box.config(state="disabled" if r.active else "readonly")
-        self.mic_refresh.config(state="disabled" if r.active else "normal")
         # blinking red dot while recording (dot toggles every 0.5s, "REC" stays)
         if r.active:
             dot = "●" if int(time.time() * 2) % 2 == 0 else "  "

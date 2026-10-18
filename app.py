@@ -86,6 +86,10 @@ class CombinedApp:
         self.jt = intensive_listening.Player(root, opts, parent=self.jt_tab)
         self.jt.active = False  # 先显示的是转录页
 
+        # 转录页也能打开设置（同一个窗口；麦克风 / 扬声器在里面选）
+        ttk.Button(self.tx.top, text="⚙ 设置", command=self.jt.open_settings).pack(
+            side="right", padx=(4, 0), before=self.tx.save_audio_btn)
+
         # 互相送文件的按钮（没有文件时变灰）
         self.to_jt_btn = ttk.Button(self.tx.top, text="送去精听 ▸",
                                     command=self.send_to_listening)

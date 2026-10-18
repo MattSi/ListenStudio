@@ -68,7 +68,10 @@ DEFAULTS = {
     "volume": 2.0,        # 音量倍数；超过 1 时自动限幅，不会爆音
     "subtitles": "off",   # 字幕：off 关闭 / always 一直显示 / after 听完再显示
     "whisper_model": "small.en",
+    "mic": None,          # 麦克风 / 扬声器的名字；None = 跟随系统默认
+    "speaker": None,
 }
+SYSTEM_DEVICE = "跟随系统默认"
 SUB_MODES = {"off": "关闭", "always": "一直显示", "after": "听完一句再显示",
              "manual": "手动显示"}  # manual：每句都先藏着，点按钮 / 按 T 才显示
 WHISPER_MODELS = ["base.en", "small.en", "medium.en", "turbo"]
@@ -91,6 +94,33 @@ def save_settings(s):
             json.dump(s, f, ensure_ascii=False, indent=2)
     except OSError as ex:
         messagebox.showwarning("设置", f"设置没能保存：\n{ex}")
+
+
+def audio_devices(kind):
+    """kind = "input" / "output"，返回 {名字: 设备号}。
+    Windows 上同一个设备在 MME / DirectSound / WASAPI 下各出现一次，只留默认的那套；
+    MME 的名字最多 31 个字，从别的那套里借完整名字。"""
+    key = f"max_{kind}_channels"
+    api = sd.default.hostapi
+    devs = [d for d in sd.query_devices() if d[key] > 0]
+    full = [d["name"] for d in devs if d["hostapi"] != api]
+    out = {}
+    for d in devs:
+        if d["hostapi"] != api or "Sound Mapper" in d["name"]:  # Mapper 就是系统默认
+            continue
+        name = next((f for f in full if f.startswith(d["name"])), d["name"])
+        out.setdefault(name, d["index"])
+    return out
+
+
+def apply_audio_devices(opts):
+    """把设置里选的麦克风 / 扬声器设成 sounddevice 的默认设备，录音和两页的播放都会用它。
+    选的设备拔掉了就退回系统默认。"""
+    try:
+        ins, outs = audio_devices("input"), audio_devices("output")
+    except Exception:  # 没有声卡之类，就全用系统默认
+        ins, outs = {}, {}
+    sd.default.device = (ins.get(opts["mic"]), outs.get(opts["speaker"]))
 
 
 # ---------- 读取音频 ----------
@@ -469,6 +499,7 @@ class Player:
             root.geometry("760x560")
 
         ui_style.apply(root)
+        apply_audio_devices(opts)
         P = ui_style.PAD
 
         # --- 工具栏（和转录页同一排版：左边打开文件，右边音量 / 设置） ---
@@ -919,6 +950,33 @@ class Player:
                       "模型越大越准越慢：base 快 / small 平衡 / medium 准").grid(
             row=r + 3, column=0, columnspan=3, sticky="w")
 
+        # --- 音频设备 ---
+        ttk.Separator(frm).grid(row=r + 4, column=0, columnspan=3, sticky="we", pady=(12, 4))
+        mic = tk.StringVar(value=o["mic"] or SYSTEM_DEVICE)
+        speaker = tk.StringVar(value=o["speaker"] or SYSTEM_DEVICE)
+        dev_boxes = {}
+        for i, (kind, label, var) in enumerate((("input", "麦克风", mic),
+                                                ("output", "扬声器", speaker))):
+            ttk.Label(frm, text=label).grid(row=r + 5 + i, column=0, sticky="w", pady=(6, 0))
+            dev_boxes[kind] = ttk.Combobox(frm, textvariable=var, state="readonly", width=44)
+            dev_boxes[kind].grid(row=r + 5 + i, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        hint = ttk.Frame(frm)
+        hint.grid(row=r + 7, column=0, columnspan=3, sticky="we")
+        ttk.Label(hint, style="Hint.TLabel",
+                  text="录音、两页的播放都用这里选的设备；刚插上耳机就点「刷新」").pack(side="left")
+        ttk.Button(hint, text="刷新", width=6,
+                   command=lambda: load_devices()).pack(side="right", pady=(4, 0))
+
+        def load_devices():
+            for kind, var in (("input", mic), ("output", speaker)):
+                try:
+                    names = list(audio_devices(kind))
+                except Exception:
+                    names = []
+                dev_boxes[kind]["values"] = [SYSTEM_DEVICE] + names
+                if var.get() not in names:  # 选过的设备现在没插着
+                    var.set(SYSTEM_DEVICE)
+
         def sync_auto():
             spins["threshold"].config(state="disabled" if auto.get() else "normal")
 
@@ -932,6 +990,8 @@ class Player:
                 s["threshold"] = None
             s["subtitles"] = key_of[sub_mode.get()]
             s["whisper_model"] = sub_model.get()
+            for k, var in (("mic", mic), ("speaker", speaker)):
+                s[k] = None if var.get() == SYSTEM_DEVICE else var.get()
             return s
 
         def apply():
@@ -940,6 +1000,7 @@ class Player:
                 return
             self.opts.update(s)
             save_settings(self.opts)
+            apply_audio_devices(self.opts)
             self.resplit()
             self.start_subs()
             self.update_sub()
@@ -953,6 +1014,8 @@ class Player:
                     v.set(DEFAULTS[k])
             sub_mode.set(label_of[DEFAULTS["subtitles"]])
             sub_model.set(DEFAULTS["whisper_model"])
+            mic.set(SYSTEM_DEVICE)
+            speaker.set(SYSTEM_DEVICE)
             sync_auto()
 
         btns = ttk.Frame(win, padding=(0, 10, 0, 12))
@@ -962,6 +1025,7 @@ class Player:
         win.bind("<Return>", lambda e: apply())
         win.bind("<Escape>", lambda e: win.destroy())
         sync_auto()
+        load_devices()
 
     # ---------- 播放 ----------
     def on_space(self):
