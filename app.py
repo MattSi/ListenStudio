@@ -16,7 +16,7 @@
   python app.py 文件.m4a --threshold -30         # 手动指定静音阈值（默认按底噪自动定）
 
 依赖：pip install tkinterdnd2 sounddevice av numpy pillow
-     转录和精听字幕另需 openai-whisper：装在这个 Python 里，或者装在电脑上另一个 Python 里
+     转录和精听字幕另需 faster-whisper（openai-whisper 也行）：装在这个 Python 里，或者装在电脑上另一个 Python 里
      （打包的 .app 就是这样：会自动去找，见 intensive_listening.find_external_python）。
      不需要 ffmpeg / ffprobe 命令行工具（音频都用 PyAV 处理）。
 """

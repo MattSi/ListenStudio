@@ -14,8 +14,9 @@
   + / -       音量大 / 小（超过 100% 自动限幅，不爆音）
 
 依赖：pip install av numpy sounddevice pillow tkinterdnd2
-  字幕是可选功能（在"⚙ 设置"里打开），另需：pip install openai-whisper
-  （有 NVIDIA 显卡会自动用 GPU；识别结果有缓存，每个文件只识别一次）
+  字幕是可选功能（在"⚙ 设置"里打开），另需：pip install faster-whisper
+  （也可以用 openai-whisper；有 NVIDIA 显卡、装了带 CUDA 的 torch 时自动用 GPU；
+   识别结果有缓存，每个文件只识别一次）
 
 断句参数点右上角"⚙ 设置"修改，改完立即重新断句，
 并保存到 settings.json（位置见 app_paths.py），下次打开自动沿用。
@@ -275,10 +276,33 @@ def column_peaks(env, a, b, width):
     return np.maximum.reduceat(env[:b], idx)
 
 
-# ---------- 字幕（可选，需要 pip install openai-whisper） ----------
+# ---------- 字幕（可选，需要 pip install faster-whisper 或 openai-whisper） ----------
 CACHE_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.cache"),
                          "jingting", "subs")
 _whisper_models = {}
+
+# 优先用 faster-whisper（CTranslate2）：CPU 上比 openai-whisper 快（算词时间戳快 2~3 倍），
+# 也不用装 1GB+ 的 torch。有 NVIDIA 显卡、又装了带 CUDA 的 torch 时还是让 openai-whisper 用 GPU。
+# 这段代码本进程用，也拼在交给外部 Python 跑的脚本前面（所以只能用标准库）。
+FW_LOADER = r'''
+import os, platform, sys
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")  # Windows 没开开发者模式时的提示
+
+def load_fw(name):
+    """faster-whisper 模型；没装、或者应该交给 openai-whisper 用 GPU 时抛 ImportError。"""
+    try:
+        import torch
+        gpu = torch.cuda.is_available()
+    except Exception:  # 没装 torch，或者 torch 坏了（ARM 机器上常见）
+        gpu = False
+    if gpu:
+        raise ImportError("用 openai-whisper + GPU")
+    from faster_whisper import WhisperModel
+    # Windows ARM 上的 CTranslate2 是 x64 模拟运行的，int8 反而比 float32 慢
+    arm_win = sys.platform == "win32" and platform.machine() == "ARM64"
+    return WhisperModel(name, device="cpu", compute_type="float32" if arm_win else "int8")
+'''
+exec(FW_LOADER)
 
 
 def subs_cache_path(path, model_name):
@@ -314,6 +338,16 @@ def transcribe_words(path, model_name):
 
 def _transcribe_here(audio16k, model_name):
     """在本进程里用 Whisper 识别（直接跑脚本、环境里装了 Whisper 时）。"""
+    lang = "en" if model_name.endswith(".en") else None
+    try:
+        key = ("fw", model_name)
+        if key not in _whisper_models:
+            _whisper_models[key] = load_fw(model_name)
+        segs, _ = _whisper_models[key].transcribe(audio16k, language=lang,
+                                                  word_timestamps=True, beam_size=1)
+        return [(w.start, w.end, w.word) for s in segs for w in s.words or []]
+    except ImportError:
+        pass  # 没有 faster-whisper，用 openai-whisper
     import torch
     import whisper
     # Windows 上没有 Triton，Whisper 算词时间戳时会退回普通实现并刷警告；
@@ -323,27 +357,36 @@ def _transcribe_here(audio16k, model_name):
         device = "cuda" if torch.cuda.is_available() else "cpu"
         _whisper_models[model_name] = whisper.load_model(model_name, device=device)
     model = _whisper_models[model_name]
-    result = model.transcribe(audio16k, word_timestamps=True, verbose=None,
-                              language="en" if model_name.endswith(".en") else None,
+    result = model.transcribe(audio16k, word_timestamps=True, verbose=None, language=lang,
                               fp16=model.device.type == "cuda")
     return [(w["start"], w["end"], w["word"])
             for seg in result["segments"] for w in seg.get("words", [])]
 
 
 # 交给外部 Python 跑的识别脚本：读 .npy 音频 → Whisper → 把词写成 JSON
-WHISPER_HELPER = r"""
-import json, sys, warnings
+WHISPER_HELPER = FW_LOADER + r"""
+import json, warnings
 warnings.filterwarnings("ignore")
-import numpy as np, torch, whisper
+import numpy as np
 audio_path, name, out_path = sys.argv[1:4]
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = whisper.load_model(name, device=device)
-r = model.transcribe(np.load(audio_path), word_timestamps=True, verbose=None,
-                     language="en" if name.endswith(".en") else None, fp16=device == "cuda")
-words = [(w["start"], w["end"], w["word"]) for s in r["segments"] for w in s.get("words", [])]
+audio, lang = np.load(audio_path), "en" if name.endswith(".en") else None
+try:
+    segs, _ = load_fw(name).transcribe(audio, language=lang, word_timestamps=True, beam_size=1)
+    words = [(w.start, w.end, w.word) for s in segs for w in s.words or []]
+except ImportError:
+    import torch, whisper
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = whisper.load_model(name, device=device)
+    r = model.transcribe(audio, word_timestamps=True, verbose=None, language=lang,
+                         fp16=device == "cuda")
+    words = [(w["start"], w["end"], w["word"]) for s in r["segments"] for w in s.get("words", [])]
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(words, f, ensure_ascii=False)
 """
+# 外部 Python 能用的条件：有 numpy，faster-whisper / openai-whisper 有一个就行
+HAS_WHISPER = ("import numpy, importlib.util as u; "
+               "assert u.find_spec('faster_whisper') or u.find_spec('whisper')")
+INSTALL_HINT = "pip3 install faster-whisper" if sys.platform == "darwin" else "pip install faster-whisper"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # Windows 上不弹黑色命令行窗口
 _external_python = []  # 找到的 Python 路径（找过一次就记住）
 
@@ -365,7 +408,7 @@ def find_external_python():
             continue
         seen.add(py)
         try:
-            ok = subprocess.run([py, "-c", "import whisper, numpy"], capture_output=True,
+            ok = subprocess.run([py, "-c", HAS_WHISPER], capture_output=True,
                                 timeout=120, creationflags=NO_WINDOW).returncode == 0
         except (OSError, subprocess.SubprocessError):
             ok = False
@@ -378,8 +421,7 @@ def find_external_python():
 def _transcribe_external(audio16k, model_name):
     py = find_external_python()
     if not py:
-        pip = "pip3" if sys.platform == "darwin" else "pip"
-        raise ImportError(f"要显示字幕需要先安装 Whisper：在终端运行 {pip} install openai-whisper")
+        raise ImportError(f"要显示字幕需要先安装 Whisper：在终端运行 {INSTALL_HINT}")
     with tempfile.TemporaryDirectory() as d:
         audio_path, out_path = os.path.join(d, "audio.npy"), os.path.join(d, "words.json")
         np.save(audio_path, audio16k.astype(np.float32))

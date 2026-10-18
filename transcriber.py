@@ -5,9 +5,10 @@ This file is a module only; start the program with: python app.py
 Requirements:
     pip install -U av numpy tkinterdnd2 sounddevice
     Decoding, playback and format conversion use PyAV (no ffmpeg command-line tools).
-    Transcription needs openai-whisper: in this Python if it's installed (pip install
-    openai-whisper), otherwise another Python on the computer that has it is used
-    (see intensive_listening.find_external_python) - that's how the packaged .app works.
+    Transcription needs faster-whisper (pip install faster-whisper; openai-whisper also
+    works): in this Python if it's installed, otherwise another Python on the computer
+    that has it is used (see intensive_listening.find_external_python) - that's how the
+    packaged .app works.
 """
 import bisect
 import importlib
@@ -46,13 +47,29 @@ REC_LENGTHS = (60, 90)   # seconds
 # Run by an external Python that has Whisper (when this one doesn't, e.g. the packaged .app):
 # reads 16 kHz mono .npy audio, prints JSON lines: ["progress", phase, pct] and
 # ["seg", start, end, text]. Cancel = the app kills the process.
-TRANSCRIBE_HELPER = r"""
-import inspect, json, sys, types, warnings
+TRANSCRIBE_HELPER = intensive_listening.FW_LOADER + r"""
+import inspect, json, types, warnings
 warnings.filterwarnings("ignore")
-import numpy as np, torch, whisper, whisper.transcribe
+import numpy as np
 
 def emit(*a):
     print(json.dumps(a), flush=True)
+
+audio_path, name = sys.argv[1:3]
+audio = np.load(audio_path)
+try:
+    model = load_fw(name)
+except ImportError:
+    model = None
+if model:   # faster-whisper: segments come one by one, progress = how far into the audio
+    emit("progress", "转录中", 0)
+    segs, info = model.transcribe(audio, language="en", beam_size=1)
+    for s in segs:
+        emit("progress", "转录中", min(100.0, 100.0 * s.end / max(info.duration, 1e-6)))
+        emit("seg", s.start, s.end, s.text.strip())
+    sys.exit()
+
+import torch, whisper, whisper.transcribe
 
 class Bar:   # tqdm stand-in that reports progress
     def __init__(self, *a, total=None, unit="", **k):
@@ -76,11 +93,10 @@ for mod in (whisper, sys.modules["whisper.transcribe"]):  # attribute is the fun
     elif t is not None:
         mod.tqdm = Bar
 
-audio_path, name = sys.argv[1:3]
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = whisper.load_model(name, device=device)
 emit("progress", "转录中", 0)
-r = model.transcribe(np.load(audio_path), language="en", task="transcribe",
+r = model.transcribe(audio, language="en", task="transcribe",
                      verbose=False, fp16=device == "cuda")
 for s in r["segments"]:
     emit("seg", s["start"], s["end"], s["text"].strip())
@@ -750,7 +766,12 @@ class App:
             self._events.put(("error", str(e)))
 
     def _transcribe_here(self, audio, model_name):
-        """Whisper in this process (raises ImportError when it isn't installed)."""
+        """Whisper in this process (raises ImportError when it isn't installed).
+        faster-whisper first (much faster on CPU), else openai-whisper."""
+        try:
+            return self._transcribe_fw(audio, model_name)
+        except ImportError:
+            pass
         import torch
         import whisper
 
@@ -769,14 +790,34 @@ class App:
                                   verbose=False, fp16=(model.device.type == "cuda"))
         return [(s["start"], s["end"], s["text"].strip()) for s in result["segments"]]
 
+    def _transcribe_fw(self, audio, model_name):
+        key = ("fw", model_name)
+        if key not in self._models:
+            self._events.put(("status", f"正在加载模型 {model_name}"
+                                        "（第一次使用会先下载）……"))
+            self._models[key] = intensive_listening.load_fw(model_name)
+        model = self._models[key]
+        if self._cancel.is_set():
+            raise Cancelled()
+
+        self._events.put(("progress", ("转录中", 0)))
+        segs, info = model.transcribe(audio, language="en", beam_size=1)
+        out = []
+        for s in segs:    # decoded lazily, one segment at a time
+            if self._cancel.is_set():
+                raise Cancelled()
+            out.append((s.start, s.end, s.text.strip()))
+            self._events.put(("progress", ("转录中",
+                                           min(100.0, 100.0 * s.end / max(info.duration, 1e-6)))))
+        return out
+
     def _transcribe_external(self, audio, model_name):
         """Run TRANSCRIBE_HELPER in another Python; it streams JSON lines back on stdout."""
         self._events.put(("status", "这个程序里没有 Whisper，正在找装了 Whisper 的 Python……"))
         py = intensive_listening.find_external_python()
         if not py:
-            pip = "pip3" if sys.platform == "darwin" else "pip"
             raise RuntimeError("转录需要 Whisper：在终端运行 "
-                               f"{pip} install openai-whisper，然后再点「开始转录」")
+                               f"{intensive_listening.INSTALL_HINT}，然后再点「开始转录」")
         if self._cancel.is_set():
             raise Cancelled()
         self._events.put(("status", f"正在加载模型 {model_name}（用 {py}；"
