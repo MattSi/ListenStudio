@@ -78,7 +78,10 @@ AUTO_DELAY_RANGE = (0.0, 30.0)
 SYSTEM_DEVICE = "跟随系统默认"
 SUB_MODES = {"off": "关闭", "always": "一直显示", "after": "听完一句再显示",
              "manual": "手动显示"}  # manual：每句都先藏着，点按钮 / 按 T 才显示
-WHISPER_MODELS = ["base.en", "small.en", "medium.en", "turbo"]
+# 识别模型：转录页和精听字幕共用一个（settings.json 里的 whisper_model），
+# 加载好的模型也共用 _whisper_models，同一个模型只加载一次
+WHISPER_MODELS = ["tiny.en", "base.en", "small.en", "medium.en", "turbo", "large-v3"]
+MODEL_LOCK = threading.Lock()  # 同一时间只让一边用模型（openai-whisper 不能两个线程同时用）
 
 
 def load_settings():
@@ -340,7 +343,13 @@ def transcribe_words(path, model_name):
 
 
 def _transcribe_here(audio16k, model_name):
-    """在本进程里用 Whisper 识别（直接跑脚本、环境里装了 Whisper 时）。"""
+    """在本进程里用 Whisper 识别（直接跑脚本、环境里装了 Whisper 时）。
+    转录页正在用模型时，在这里排队等它用完。"""
+    with MODEL_LOCK:
+        return _transcribe_here_locked(audio16k, model_name)
+
+
+def _transcribe_here_locked(audio16k, model_name):
     lang = "en" if model_name.endswith(".en") else None
     try:
         key = ("fw", model_name)
@@ -1008,8 +1017,8 @@ class Player:
                           state="readonly", width=14)
         om.grid(row=r + 2, column=1, columnspan=2, sticky="w", pady=(6, 0))
         ttk.Label(frm, style="Hint.TLabel", justify="left",
-                 text="用 Whisper 自动识别，每个文件只识别一次（结果会缓存）\n"
-                      "模型越大越准越慢：base 快 / small 平衡 / medium 准").grid(
+                 text="转录页和精听字幕共用这个模型；字幕每个文件只识别一次（结果会缓存）\n"
+                      "模型越大越准越慢：tiny / base 快，small 平衡，medium / large 准").grid(
             row=r + 3, column=0, columnspan=3, sticky="w")
 
         # --- 音频设备 ---
