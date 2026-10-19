@@ -71,7 +71,10 @@ DEFAULTS = {
     "whisper_model": "small.en",
     "mic": None,          # 麦克风 / 扬声器的名字；None = 跟随系统默认
     "speaker": None,
+    "auto_next": False,   # 一句播完后自动播放下一句
+    "auto_delay": 3.0,    # 自动播放下一句前等几秒
 }
+AUTO_DELAY_RANGE = (0.0, 30.0)
 SYSTEM_DEVICE = "跟随系统默认"
 SUB_MODES = {"off": "关闭", "always": "一直显示", "after": "听完一句再显示",
              "manual": "手动显示"}  # manual：每句都先藏着，点按钮 / 按 T 才显示
@@ -640,6 +643,23 @@ class Player:
         om.bind("<<ComboboxSelected>>", on_mode)
         om.pack(side="left", padx=(6, 3), ipady=3)
 
+        # 自动下一句：一句播完，等 N 秒自动播放下一句
+        self.auto_job = None   # root.after 的任务；None = 没有在倒计时
+        self.auto_due = 0.0    # 倒计时结束的时刻（time.monotonic）
+        auto = ttk.Frame(bar)
+        auto.pack(side="left", padx=(12, 0))
+        self.auto_var = tk.BooleanVar(value=opts["auto_next"])
+        ttk.Checkbutton(auto, text="自动下一句", variable=self.auto_var, takefocus=False,
+                        command=self.on_auto_change).pack(side="left")
+        self.delay_var = tk.StringVar(value=f"{opts['auto_delay']:g}")
+        lo, hi = AUTO_DELAY_RANGE
+        self.delay_spin = ttk.Spinbox(auto, from_=lo, to=hi, increment=0.5, width=4,
+                                      textvariable=self.delay_var, command=self.on_auto_change)
+        self.delay_spin.pack(side="left", padx=(4, 2))
+        ttk.Label(auto, text="秒后").pack(side="left")
+        self.delay_spin.bind("<Return>", lambda e: self.on_auto_change(give_back_focus=True))
+        self.delay_spin.bind("<FocusOut>", lambda e: self.on_auto_change())
+
         # --- 视频画面（只有视频文件才显示） ---
         self.screen = tk.Canvas(parent, width=640, height=360, bg="black",
                                 highlightthickness=0, cursor="hand2")
@@ -1070,11 +1090,49 @@ class Player:
         load_devices()
 
     # ---------- 播放 ----------
+    # ---------- 自动下一句 ----------
+    def on_auto_change(self, give_back_focus=False):
+        """勾选框 / 秒数改了：检查秒数、保存设置；关掉时取消正在进行的倒计时。"""
+        lo, hi = AUTO_DELAY_RANGE
+        try:
+            delay = min(hi, max(lo, float(self.delay_var.get())))
+        except ValueError:
+            delay = self.opts["auto_delay"]  # 填的不是数字：恢复原来的值
+        self.delay_var.set(f"{delay:g}")
+        changed = (self.opts["auto_next"], self.opts["auto_delay"]) != (self.auto_var.get(), delay)
+        self.opts["auto_next"], self.opts["auto_delay"] = self.auto_var.get(), delay
+        if changed:
+            save_settings(self.opts)
+        if not self.opts["auto_next"] and self.auto_job:
+            self.cancel_auto()
+            self.refresh("⏸ 已暂停，按空格继续")
+        if give_back_focus:
+            self.bar.master.focus_set()  # 焦点还给页面，空格等快捷键才继续有效
+
+    def schedule_auto(self):
+        """当前句刚播完时调用：开了自动下一句、又不是最后一句，就开始倒计时。"""
+        if not self.opts["auto_next"] or self.cur >= len(self.segs) - 1:
+            return False
+        delay = self.opts["auto_delay"]
+        self.auto_due = time.monotonic() + delay
+        self.auto_job = self.root.after(int(delay * 1000), self._auto_advance)
+        return True
+
+    def cancel_auto(self):
+        if self.auto_job:
+            self.root.after_cancel(self.auto_job)
+            self.auto_job = None
+
+    def _auto_advance(self):
+        self.auto_job = None
+        if self.active and self.segs and self.cur < len(self.segs) - 1:
+            self.play(self.cur + 1)
+
     def on_space(self):
         if not self.segs:
             return
-        if self.playing or self.pending:
-            self.stop_all()
+        if self.playing or self.pending or self.auto_job:
+            self.stop_all()  # 倒计时中按空格 = 取消自动播放，停在这一句
             self.refresh("已停止")
         elif not self.played:
             self.play(self.cur)
@@ -1123,7 +1181,7 @@ class Player:
             widget.bind("<Button-5>", handler)
 
     def update_buttons(self):
-        if self.playing or self.pending:
+        if self.playing or self.pending or self.auto_job:
             main = "■ 停止"
         elif not self.played:
             main = "▶ 开始"
@@ -1165,6 +1223,7 @@ class Player:
         sd.stop()
         self.playing = False
         self.pending = None
+        self.cancel_auto()
         if self.video:
             self.video.cancel()
 
@@ -1186,7 +1245,12 @@ class Player:
                     self.video.cancel()  # 画面停在最后显示的那一帧
                 if self.opts["subtitles"] == "after":
                     self.revealed = True  # 听完了，揭晓字幕（手动模式不自动揭晓）
-                self.refresh("⏸ 已暂停，按空格继续")
+                if self.schedule_auto():
+                    self.refresh(self.auto_msg())
+                elif self.opts["auto_next"] and self.cur == len(self.segs) - 1:
+                    self.refresh("✓ 已播完最后一句")
+                else:
+                    self.refresh("⏸ 已暂停，按空格继续")
             else:
                 s, e = self.segs[self.cur]
                 pos = min(e, s + (time.monotonic() - self.t0) * self.sr)
@@ -1196,7 +1260,13 @@ class Player:
         elif self.video and self.video.frames and not self.pending:
             self.show_frame(self.video.frames.pop()[1])  # 预览帧
             self.video.frames.clear()
+        if self.auto_job and not self.playing:
+            self.status.config(text=self.auto_msg())  # 倒计时：每次刷新剩下的秒数
         self.root.after(15 if self.video else 30, self.poll)
+
+    def auto_msg(self):
+        left = max(0.0, self.auto_due - time.monotonic())
+        return f"⏸ {left:.1f} 秒后自动播放下一句（空格 = 取消）"
 
     # ---------- 画面 ----------
     def show_due_frame(self, now):
