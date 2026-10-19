@@ -37,7 +37,6 @@ import ui_style
 
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".wma",
               ".webm", ".mp4", ".mkv", ".mov"}
-MODELS = ["tiny.en", "base.en", "small.en", "medium.en", "turbo", "large-v3"]
 DROP_HINT = "把音频或视频文件拖到这里（或点这里选择），然后点「开始转录」"
 NO_WINDOW = intensive_listening.NO_WINDOW   # hide the helper Python's console on Windows
 REC_DIR = app_paths.RECORDINGS_DIR
@@ -340,9 +339,15 @@ class Recorder:
 
 
 class App:
-    def __init__(self, root, parent=None):
-        """parent: a frame to build into (e.g. a tab in app.py); None = own window."""
+    def __init__(self, root, parent=None, get_model=None):
+        """parent: a frame to build into (e.g. a tab in app.py); None = own window.
+        get_model: returns the Whisper model name (shared with 精听, kept in settings.json
+        and chosen in ⚙ 设置)."""
         self.root = root
+        if get_model is None:
+            opts = intensive_listening.load_settings()
+            get_model = lambda: opts["whisper_model"]
+        self.get_model = get_model
         self.embedded = parent is not None
         parent = parent or root
         if not self.embedded:
@@ -351,7 +356,7 @@ class App:
         self.base_title = root.title()
         self._worker_thread = None
 
-        self._models = {}          # name -> loaded model (cached)
+        self._models = intensive_listening._whisper_models  # loaded models, shared with 精听
         self._busy = False
         self._cancel = threading.Event()
         self._events = queue.Queue()
@@ -370,16 +375,14 @@ class App:
         # --- top bar ---
         top = self.top = ttk.Frame(parent, padding=(P, P, P, P))
         top.pack(fill="x")
-        ttk.Label(top, text="模型").pack(side="left")
-        self.model_var = tk.StringVar(value="small.en")
-        self.model_box = ttk.Combobox(top, textvariable=self.model_var, values=MODELS,
-                                      state="readonly", width=11)
-        self.model_box.pack(side="left", padx=(6, 12))
         self.open_btn = ttk.Button(top, text="打开文件…", command=self.browse)
         self.open_btn.pack(side="left")
         self.ts_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(top, text="显示时间戳", variable=self.ts_var,
                         command=self.render).pack(side="left", padx=12)
+        # 识别模型只在 ⚙ 设置 里选（和精听字幕共用）；这里显示当前用的是哪个
+        self.model_label = ttk.Label(top, style="Hint.TLabel")
+        self.model_label.pack(side="left")
         self.save_audio_btn = ttk.Button(top, text="保存音频…", command=self.save_audio)
         self.save_audio_btn.pack(side="right")
         ttk.Button(top, text="保存文字…", command=self.save).pack(side="right", padx=4)
@@ -665,7 +668,6 @@ class App:
                               else "disabled")
         self.cancel_btn.config(state="normal" if self._busy else "disabled")
         self.open_btn.config(state="disabled" if locked else "normal")
-        self.model_box.config(state="disabled" if self._busy else "readonly")
         self.save_audio_btn.config(state="normal" if self.current_file and
                                    not self.recorder.active else "disabled")
         self._refresh_recorder()
@@ -685,7 +687,7 @@ class App:
         self._set_progress(0)
         self._update_buttons()
         self._worker_thread = threading.Thread(
-            target=self._worker, args=(self.current_file, self.model_var.get()), daemon=True)
+            target=self._worker, args=(self.current_file, self.get_model()), daemon=True)
         self._worker_thread.start()
 
     def cancel(self):
@@ -767,7 +769,20 @@ class App:
 
     def _transcribe_here(self, audio, model_name):
         """Whisper in this process (raises ImportError when it isn't installed).
-        faster-whisper first (much faster on CPU), else openai-whisper."""
+        The loaded models are shared with 精听 subtitles, so wait until they're free."""
+        lock = intensive_listening.MODEL_LOCK
+        if not lock.acquire(blocking=False):
+            self._events.put(("status", "精听字幕正在用识别模型，等它识别完就开始……"))
+            while not lock.acquire(timeout=0.2):
+                if self._cancel.is_set():
+                    raise Cancelled()
+        try:
+            return self._transcribe_here_locked(audio, model_name)
+        finally:
+            lock.release()
+
+    def _transcribe_here_locked(self, audio, model_name):
+        """faster-whisper first (much faster on CPU), else openai-whisper."""
         try:
             return self._transcribe_fw(audio, model_name)
         except ImportError:
@@ -897,6 +912,9 @@ class App:
         elif self.recorder.active:
             self._refresh_recorder()
         self._refresh_player()
+        model_text = f"模型 {self.get_model()}"   # follows changes made in ⚙ 设置
+        if self.model_label.cget("text") != model_text:
+            self.model_label.config(text=model_text)
         self.root.after(100, self._poll)
 
     # ---------- output ----------
