@@ -227,7 +227,7 @@ class Reader:
         self.cmp_bar.pack(side="left", fill="x", expand=True, padx=(8, 0))
         self.cmp_idx = 0          # 逐句对比现在在第几句
         self.cmp_playing = False  # 正在放这一句的「标准 → 你的」
-        self.cmp_after_check = False  # 点了逐句对比但还没检查：检查完自动开始
+        self.cmp_pending = False  # 点了逐句对比、正在先补合成 / 检查：做完自动开始对比
         self.text.bind("<Double-Button-1>", self.on_text_double_click, add="+")
 
         # --- 检查结果 ---
@@ -453,15 +453,28 @@ class Reader:
         return [(a, b, m) for (a, b), m in zip(self.speech.times, mine)]
 
     def compare_play(self):
-        """「↔ 逐句对比」：从当前这句开始；还没检查过发音就先检查，检查完自动开始。"""
-        if not (self.speech and self.mine) or self.recorder.active or self.job:
-            if not self.speech:
-                self.status.set("先点「▶ 朗读」生成标准读法，再对比")
+        """「↔ 逐句对比」：缺什么先自动补上——还没有标准朗读就先合成，还没检查过发音就先检查——
+        然后从当前这句开始对比。"""
+        if self.recorder.active or self.job:
             return
-        if not self.result:
-            self.cmp_after_check = True
+        text = self.get_text()
+        if not self.mine:
+            self.status.set("先「● 录我的朗读」，把上面的文字读一遍，再逐句对比")
+            return
+        if not text.strip():
+            self.status.set("文字框是空的，没法对比")
+            return
+        if not self.speech:   # 第 1 步：合成标准朗读（合成完不播放，接着往下做）
+            self.cmp_pending = True
+            self.stop()
+            voice, speed, pause, engine = self.options()
+            self.start_job("synth", self._synth_worker, text, voice, speed, pause, engine)
+            return
+        if not self.result:   # 第 2 步：检查发音（要靠它才知道你的录音里每句在哪）
+            self.cmp_pending = True
             self.check()
             return
+        self.cmp_pending = False
         n = len(self.pairs())
         self.play_pair(0 if self.cmp_idx >= n - 1 and not self.cmp_playing else self.cmp_idx)
 
@@ -550,7 +563,7 @@ class Reader:
 
     def clear_result(self):
         self.result = None
-        self.cmp_idx, self.cmp_after_check = 0, False
+        self.cmp_idx = 0
         self.text.tag_remove("miss", "1.0", "end")
         self.text.tag_remove("wrong", "1.0", "end")
         self.score.config(text="")
@@ -625,13 +638,19 @@ class Reader:
                     continue
                 self.job = None
                 self.bar["value"] = 0
+                # 逐句对比在等这一步：成功了就接着做下一步，否则作罢
+                pending, self.cmp_pending = self.cmp_pending, False
                 if kind == "synth_done":
                     text, sp = msg
                     if text == self.get_text():   # 合成途中文字没被改过
                         self.speech = sp
                         how = "（离线）" if sp.engine == "kokoro" else ""
-                        self.status.set(f"合成好了{how}，开始朗读")
-                        self.play_speech()
+                        if pending:
+                            self.status.set(f"标准朗读合成好了{how}，接着检查发音……")
+                            self.root.after(10, self.compare_play)
+                        else:
+                            self.status.set(f"合成好了{how}，开始朗读")
+                            self.play_speech()
                 elif kind == "synth_error":
                     self.status.set("朗读失败")
                     if tts.offline_ready():
@@ -645,12 +664,9 @@ class Reader:
                     if path == self.mine and text == self.get_text():
                         self.show_result(r)
                         self.status.set("检查完了：可以「↔ 逐句对比」，一句一句听差别")
-                        if self.cmp_after_check:   # 是点「逐句对比」触发的检查：接着开始对比
-                            self.cmp_after_check = False
-                            self.root.after(10, lambda: self.play_pair(0))
-                    self.cmp_after_check = False
+                        if pending:   # 是点「逐句对比」触发的检查：接着开始对比
+                            self.root.after(10, self.compare_play)
                 elif kind == "job_error":
-                    self.cmp_after_check = False
                     self.status.set("出错了")
                     messagebox.showerror("出错了", msg)
                 else:   # job_end
@@ -727,7 +743,7 @@ class Reader:
         self.rec_btn.config(text="■ 停止录音" if rec else "● 录我的朗读",
                             state=st(rec or not busy))
         self.play_me_btn.config(state=st(self.mine and not rec))
-        self.cmp_btn.config(state=st(self.mine and self.speech and not rec and not busy))
+        self.cmp_btn.config(state=st(self.mine and has_text and not rec and not busy))
         self.check_btn.config(state=st(self.mine and has_text and not rec and not busy))
         pairs = self.pairs()
         ok = bool(pairs) and not rec and not busy
@@ -739,12 +755,21 @@ class Reader:
         b["stop"].config(state=st(self.cmp_playing or (pairs and self.pl_wait)))
         self.cmp_bar.config(maximum=max(n, 1), value=(i + 1) if pairs else 0)
         self.update_cmp_info()
+        if tts.offline_ready():
+            self.offline_lbl.config(text="离线语音 ✓ 已下载")
+            self.offline_btn.pack_forget()
+        else:
+            self.offline_lbl.config(text="没网时用的离线语音：")
+            if not self.offline_btn.winfo_manager():
+                self.offline_btn.pack(side="right")
+            self.offline_btn.config(text=f"下载（约 {tts.OFFLINE_SIZE_MB} MB）",
+                                    state=st(not busy))
 
     def update_cmp_info(self):
         pairs = self.pairs()
         if not pairs:
-            hint = ("点「↔ 逐句对比」开始（会先检查发音）" if self.mine and self.speech
-                    else "朗读 + 录好自己的之后，可以逐句对比")
+            hint = ("点「↔ 逐句对比」开始（缺朗读 / 检查会自动先做）" if self.mine
+                    else "录好自己的朗读后，可以逐句对比")
             self.cmp_info.config(text=hint, style="Hint.TLabel")
             return
         i, n = self.cmp_idx, len(pairs)
@@ -755,15 +780,6 @@ class Reader:
         elif pairs[i][2] is None:
             text += " · 你的录音里没找到这句"
         self.cmp_info.config(text=text, style="TLabel")
-        if tts.offline_ready():
-            self.offline_lbl.config(text="离线语音 ✓ 已下载")
-            self.offline_btn.pack_forget()
-        else:
-            self.offline_lbl.config(text="没网时用的离线语音：")
-            if not self.offline_btn.winfo_manager():
-                self.offline_btn.pack(side="right")
-            self.offline_btn.config(text=f"下载（约 {tts.OFFLINE_SIZE_MB} MB）",
-                                    state=st(not busy))
 
     def shutdown(self):
         """离开页面 / 关程序：停播放；录了一半的也存下来。"""
