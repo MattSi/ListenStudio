@@ -1,9 +1,10 @@
 """听写 & 精听（ListenStudio）—— 程序的唯一入口。
 
-两个标签页：
-  转录 / 录音  transcriber.py：拖入音频 → Whisper 转文字（带时间戳）、播放、60/90 秒录音、另存音频
+三个标签页：
+  转录 / 录音  transcriber.py：拖入音频 → Whisper 转文字（带时间戳）、播放、录音、另存音频
   精听        intensive_listening.py：自动断句、每句播完暂停、波形、视频、字幕
-两边可以互相送文件：转录页「送去精听 ▸」，精听页「◂ 送去转录」。
+  朗读        reader.py：把自己写的英文读出来（tts.py），录自己读一遍，检查发音、逐句对比
+转录和精听可以互相送文件：转录页「送去精听 ▸」，精听页「◂ 送去转录」。
 切换标签页时，离开的那一页会自动停止播放。
 设置存在 settings.json，录音存在 recordings/（打包后的位置见 app_paths.py）。
 
@@ -28,6 +29,7 @@ from tkinter import messagebox, ttk
 from tkinterdnd2 import TkinterDnD
 
 import intensive_listening
+import reader
 import ui_style
 import transcriber
 
@@ -76,17 +78,19 @@ class CombinedApp:
 
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True)
-        self.tx_tab, self.jt_tab = tk.Frame(self.nb), tk.Frame(self.nb)
+        self.tx_tab, self.jt_tab, self.rd_tab = (tk.Frame(self.nb) for _ in range(3))
         self.nb.add(self.tx_tab, text="  转录 / 录音  ")
         self.nb.add(self.jt_tab, text="  精听  ")
+        self.nb.add(self.rd_tab, text="  朗读  ")
 
-        # 识别模型两页共用：存在精听的设置（settings.json）里，在「⚙ 设置」里选
-        self.tx = transcriber.App(root, parent=self.tx_tab,
-                                  get_model=lambda: self.jt.opts["whisper_model"])
+        # 两页共用一份设置（settings.json）：识别模型在「⚙ 设置」里选，录音时长在转录页选
         opts = intensive_listening.load_settings()
         opts.update(overrides or {})
+        self.tx = transcriber.App(root, parent=self.tx_tab, settings=opts)
         self.jt = intensive_listening.Player(root, opts, parent=self.jt_tab)
         self.jt.active = False  # 先显示的是转录页
+        self.rd = reader.Reader(root, self.rd_tab, opts,
+                                mic_busy=lambda: self.tx.recorder.active)
 
         # 转录页也能打开设置（同一个窗口；麦克风 / 扬声器在里面选）
         ttk.Button(self.tx.top, text="⚙ 设置", command=self.jt.open_settings).pack(
@@ -117,17 +121,19 @@ class CombinedApp:
 
     # ---------- 标签页切换 ----------
     def on_tab_changed(self, event=None):
-        on_jt = self.nb.select() == str(self.jt_tab)
-        self.jt.active = on_jt
-        if on_jt:
-            if self.tx.player.playing:   # 离开转录页：暂停那边的播放
-                self.tx.player.pause()
-            self.jt_tab.focus_set()      # 焦点离开转录文字框，空格才不会打进去
-        else:
-            if self.jt.playing or self.jt.pending:  # 离开精听页：停止那边的播放
-                self.jt.stop_all()
-                self.jt.refresh("已停止")
-            self.tx_tab.focus_set()
+        """切换标签页：别的页停止 / 暂停播放，免得两边同时出声。"""
+        cur = self.nb.select()
+        self.jt.active = cur == str(self.jt_tab)
+        self.rd.active = cur == str(self.rd_tab)
+        if cur != str(self.tx_tab) and self.tx.player.playing:
+            self.tx.player.pause()
+        if not self.jt.active and (self.jt.playing or self.jt.pending or self.jt.auto_job):
+            self.jt.stop_all()
+            self.jt.refresh("已停止")
+        if not self.rd.active:
+            self.rd.shutdown()   # 停播放；在录「我的朗读」的话就停下并保存
+        if self.jt.active:
+            self.jt_tab.focus_set()  # 焦点离开文字框，精听的空格等快捷键才不会打进去
 
     # ---------- 互送文件 ----------
     def send_to_listening(self):
@@ -155,6 +161,7 @@ class CombinedApp:
     def quit(self):
         self.tx.shutdown()   # 停止播放；录了一半的音也会存下来
         self.jt.stop_all()
+        self.rd.shutdown()   # 同上，并保存「朗读」页的草稿
         self.root.destroy()
 
 

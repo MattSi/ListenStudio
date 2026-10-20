@@ -31,6 +31,16 @@ def data_dir():
 SETTINGS_FILE = os.path.join(data_dir(), "settings.json")
 RECORDINGS_DIR = (os.path.join(os.path.expanduser("~/Music"), APP_NAME) if FROZEN
                   else os.path.join(HERE, "recordings"))
+READER_DRAFT = os.path.join(data_dir(), "reader_draft.txt")   # 「朗读」页正在写的文字
+
+# 下载的离线模型（不管是不是打包版，都放用户目录，不放进程序文件夹 / git）
+MODELS_DIR = os.path.join(_user_dir(APP_NAME), "models")
+# 可以随时删掉重建的缓存（朗读生成的音频）
+if sys.platform == "darwin":
+    CACHE_DIR = os.path.expanduser(f"~/Library/Caches/{APP_NAME}")
+else:
+    CACHE_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.cache"),
+                             APP_NAME, "cache")
 
 # 改名前的设置文件（脚本旁边的、以前打包版用户目录里的）
 LEGACY_SETTINGS = [

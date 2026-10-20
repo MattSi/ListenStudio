@@ -41,6 +41,7 @@ DROP_HINT = "把音频或视频文件拖到这里（或点这里选择），然�
 NO_WINDOW = intensive_listening.NO_WINDOW   # hide the helper Python's console on Windows
 REC_DIR = app_paths.RECORDINGS_DIR
 REC_LENGTHS = (60, 90)   # seconds
+REC_CUSTOM_MINUTES = (0.5, 60.0)   # range for 「自定」, in minutes
 
 
 # Run by an external Python that has Whisper (when this one doesn't, e.g. the packaged .app):
@@ -279,12 +280,16 @@ def convert_audio(src, dst):
 
 
 class Recorder:
-    """Records the default microphone to a mono WAV, stopping itself after `limit` seconds."""
+    """Records the default microphone to a mono WAV, stopping itself after `limit` seconds.
+    Audio goes to the file while recording (via a writer thread), so long recordings
+    don't pile up in memory."""
     SR = 44100
 
     def __init__(self):
         self._stream = None
-        self._chunks = []
+        self._queue = None
+        self._writer = None
+        self._wav = None
         self.frames = 0
         self.limit = 0
         self.path = None
@@ -303,51 +308,65 @@ class Recorder:
 
     def start(self, seconds, path):
         import sounddevice as sd
-        self._chunks, self.frames = [], 0
+        self.frames = 0
         self.limit, self.path = seconds, path
-        max_frames = seconds * self.SR
+        max_frames = int(seconds * self.SR)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        wav = wave.open(path, "wb")
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(self.SR)
+        q = queue.Queue()
 
         def callback(indata, frames, time_info, status):
             take = min(frames, max_frames - self.frames)
             if take > 0:
-                self._chunks.append(bytes(indata)[:take * 2])   # int16 mono = 2 bytes/frame
+                q.put(bytes(indata)[:take * 2])   # int16 mono = 2 bytes/frame
                 self.frames += take
             if self.frames >= max_frames:
                 raise sd.CallbackStop
 
-        self._stream = sd.RawInputStream(samplerate=self.SR, channels=1, dtype="int16",
-                                         callback=callback)
+        def write():   # disk writes stay out of the audio callback
+            while (chunk := q.get()) is not None:
+                wav.writeframes(chunk)
+
+        try:
+            self._stream = sd.RawInputStream(samplerate=self.SR, channels=1, dtype="int16",
+                                             callback=callback)
+        except Exception:
+            wav.close()
+            os.remove(path)
+            raise
+        self._wav, self._queue = wav, q
+        self._writer = threading.Thread(target=write, daemon=True)
+        self._writer.start()
         self._stream.start()
 
     def finish(self):
-        """Stop (if still running), write the WAV and return its path (None if empty)."""
+        """Stop (if still running), finish the WAV and return its path (None if empty)."""
         if not self._stream:
             return None
         self._stream.stop()
         self._stream.close()
         self._stream = None
+        self._queue.put(None)      # tell the writer it's done, then wait for it
+        self._writer.join()
+        self._wav.close()
+        self._wav = self._queue = self._writer = None
         if not self.frames:
+            os.remove(self.path)
             return None
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with wave.open(self.path, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(self.SR)
-            w.writeframes(b"".join(self._chunks))
-        self._chunks = []
         return self.path
 
 
 class App:
-    def __init__(self, root, parent=None, get_model=None):
+    def __init__(self, root, parent=None, settings=None):
         """parent: a frame to build into (e.g. a tab in app.py); None = own window.
-        get_model: returns the Whisper model name (shared with 精听, kept in settings.json
-        and chosen in ⚙ 设置)."""
+        settings: the settings dict shared with 精听 (settings.json): the Whisper model
+        (chosen in ⚙ 设置) and the recording length live there."""
         self.root = root
-        if get_model is None:
-            opts = intensive_listening.load_settings()
-            get_model = lambda: opts["whisper_model"]
-        self.get_model = get_model
+        self.settings = settings if settings is not None else intensive_listening.load_settings()
+        self.get_model = lambda: self.settings["whisper_model"]
         self.embedded = parent is not None
         parent = parent or root
         if not self.embedded:
@@ -402,11 +421,26 @@ class App:
         rec.pack(fill="x")
         self.rec_btn = ttk.Button(rec, text="● 录音", width=BW, command=self.toggle_record)
         self.rec_btn.pack(side="left")
-        self.rec_len = tk.IntVar(value=REC_LENGTHS[0])
-        self.rec_radios = [ttk.Radiobutton(rec, text=f"{n} 秒", value=n, variable=self.rec_len)
-                           for n in REC_LENGTHS]
+        # 时长：60 / 90 秒，或者「自定 N 分钟」；选过的会存进 settings.json
+        choice = str(self.settings["rec_length"])
+        choices = [str(n) for n in REC_LENGTHS] + ["custom"]
+        self.rec_choice = tk.StringVar(value=choice if choice in choices else choices[0])
+        self.rec_radios = [ttk.Radiobutton(rec, text=f"{n} 秒", value=str(n),
+                                           variable=self.rec_choice) for n in REC_LENGTHS]
+        self.rec_radios.append(ttk.Radiobutton(rec, text="自定", value="custom",
+                                               variable=self.rec_choice))
         for r in self.rec_radios:
             r.pack(side="left", padx=(10, 0))
+        lo, hi = REC_CUSTOM_MINUTES
+        self.rec_min_var = tk.StringVar(value=f"{self.settings['rec_custom_min']:g}")
+        self.rec_min_spin = ttk.Spinbox(rec, from_=lo, to=hi, increment=0.5, width=5,
+                                        textvariable=self.rec_min_var,
+                                        command=self._on_rec_minutes)
+        self.rec_min_spin.pack(side="left", padx=(4, 2))
+        self.rec_min_spin.bind("<Return>", lambda e: self._on_rec_minutes())
+        self.rec_min_spin.bind("<FocusOut>", lambda e: self._on_rec_minutes())
+        ttk.Label(rec, text="分钟").pack(side="left")
+        self.rec_radios.append(self.rec_min_spin)   # disabled together while recording
         self.rec_dot = tk.Label(rec, text="", fg=ui_style.REC, width=6, anchor="w",
                                 font=(ui_style.FONT, 10, "bold"))
         self.rec_dot.pack(side="left", padx=(8, 0))
@@ -414,10 +448,10 @@ class App:
         ttk.Checkbutton(rec, text="录完自动转录",
                         variable=self.auto_tx).pack(side="right")
         self.rec_time = tk.StringVar(value="00:00 / 01:00")
-        ttk.Label(rec, textvariable=self.rec_time, width=13, anchor="e").pack(side="right")
+        ttk.Label(rec, textvariable=self.rec_time, width=16, anchor="e").pack(side="right")
         self.rec_bar = ttk.Progressbar(rec, mode="determinate", maximum=100)
         self.rec_bar.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self.rec_len.trace_add("write", lambda *a: self._refresh_recorder())
+        self.rec_choice.trace_add("write", lambda *a: self._on_rec_choice())
 
         # --- start / cancel + progress ---
         ctl = ttk.Frame(parent, padding=(P, P, P, 0))
@@ -494,13 +528,44 @@ class App:
             return
         self.player.stop()          # don't record our own playback
         name = time.strftime("rec_%Y%m%d_%H%M%S.wav")
+        self._on_rec_minutes()      # take a custom length that was typed but not confirmed
+        seconds = self.rec_seconds()
         try:
-            self.recorder.start(self.rec_len.get(), os.path.join(REC_DIR, name))
+            self.recorder.start(seconds, os.path.join(REC_DIR, name))
         except Exception as e:
             messagebox.showerror("录音失败", f"打不开麦克风：\n{e}")
             return
-        self.status.set(f"正在录音（{self.rec_len.get()} 秒，到时间自动停止；点「停止录音」可提前结束）")
+        self.status.set(f"正在录音（{self.fmt_time(seconds)}，到时间自动停止；"
+                        "点「停止录音」可提前结束）")
         self._update_buttons()
+
+    def rec_seconds(self):
+        """The chosen recording length in seconds."""
+        if self.rec_choice.get() == "custom":
+            return int(round(self.settings["rec_custom_min"] * 60))
+        return int(self.rec_choice.get())
+
+    def _on_rec_choice(self):
+        self.settings["rec_length"] = self.rec_choice.get()
+        intensive_listening.save_settings(self.settings)
+        self._refresh_recorder()
+
+    def _on_rec_minutes(self):
+        """Custom minutes edited: clamp, remember, and pick 「自定」 if the value changed."""
+        lo, hi = REC_CUSTOM_MINUTES
+        old = self.settings["rec_custom_min"]
+        try:
+            minutes = round(min(hi, max(lo, float(self.rec_min_var.get()))) * 2) / 2
+        except ValueError:
+            minutes = old            # not a number: put the old value back
+        self.rec_min_var.set(f"{minutes:g}")
+        if minutes != old:
+            self.settings["rec_custom_min"] = minutes
+            if self.rec_choice.get() != "custom":
+                self.rec_choice.set("custom")   # saves via _on_rec_choice
+            else:
+                intensive_listening.save_settings(self.settings)
+        self._refresh_recorder()
 
     def _finish_record(self):
         try:
@@ -520,7 +585,7 @@ class App:
 
     def _refresh_recorder(self):
         r = self.recorder
-        total = r.limit if r.active else self.rec_len.get()
+        total = r.limit if r.active else self.rec_seconds()
         done = r.elapsed if r.active else 0
         self.rec_time.set(f"{self.fmt_time(done)} / {self.fmt_time(total)}")
         self.rec_bar["value"] = 100 * done / total if total else 0

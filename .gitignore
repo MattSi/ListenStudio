@@ -2,6 +2,7 @@
 recordings/
 settings.json
 jingting_settings.json
+reader_draft.txt
 
 # Python
 __pycache__/
