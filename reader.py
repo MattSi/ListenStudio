@@ -6,8 +6,11 @@
   ③ 「● 录我的朗读」：自己读一遍（最长 10 分钟，点「停止录音」结束）
   ④ 「✓ 检查发音」：用 Whisper 听你的录音，和原文逐词对比：
        漏读的词标红，读得不对（被听成别的词）的标橙，再给一个读对的比例；
-     「↔ 逐句对比」：标准一句、你的一句轮流播放（检查过之后才能逐句切开，
-       没检查时就先放完整的标准朗读，再放完整的你的录音）
+     「↔ 逐句对比」：一句一句地先放标准、再放你的（还没检查过会先自动检查，
+       因为要靠检查结果才知道你的录音里每句在哪）。对比那一行可以
+       ⏮ 上一句 / ↻ 重听这句 / 下一句 ⏭ / ■ 停止，进度条显示到第几句；
+       勾「连续播放」一句完了自动接下一句，不勾就停在这句等你选；
+       也可以双击文字框里的某一句，直接对比那一句
 语音合成见 tts.py（Edge 在线语音为主，Kokoro 离线语音备用）。
 """
 import difflib
@@ -203,6 +206,29 @@ class Reader:
         self.check_btn.pack(side="left")
         self.me_time = tk.StringVar(value="")
         ttk.Label(me, textvariable=self.me_time, width=16, anchor="e").pack(side="right")
+
+        # --- 逐句对比：标准一句、你的一句；可以重听、换句、连续播放 ---
+        cmp = ttk.Frame(parent, padding=(P, 8, P, 0))
+        cmp.pack(fill="x")
+        self.cmp_buttons = {}
+        for key, text, cmd, w in (("prev", "⏮ 上一句", lambda: self.play_pair(self.cmp_idx - 1), 9),
+                                  ("again", "↻ 重听这句", lambda: self.play_pair(self.cmp_idx), 10),
+                                  ("next", "下一句 ⏭", lambda: self.play_pair(self.cmp_idx + 1), 9),
+                                  ("stop", "■ 停止", self.stop, 7)):
+            b = ttk.Button(cmp, text=text, width=w, command=cmd)
+            b.pack(side="left", padx=(0, 4))
+            self.cmp_buttons[key] = b
+        self.cmp_auto = tk.BooleanVar(value=settings["cmp_auto"])
+        ttk.Checkbutton(cmp, text="连续播放", variable=self.cmp_auto,
+                        command=self.on_cmp_auto).pack(side="right")
+        self.cmp_info = ttk.Label(cmp, width=30, anchor="w")
+        self.cmp_info.pack(side="right", padx=(8, 8))
+        self.cmp_bar = ttk.Progressbar(cmp, mode="determinate", maximum=1)
+        self.cmp_bar.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.cmp_idx = 0          # 逐句对比现在在第几句
+        self.cmp_playing = False  # 正在放这一句的「标准 → 你的」
+        self.cmp_after_check = False  # 点了逐句对比但还没检查：检查完自动开始
+        self.text.bind("<Double-Button-1>", self.on_text_double_click, add="+")
 
         # --- 检查结果 ---
         res = ttk.Frame(parent, padding=(P, 8, P, 0))
@@ -418,24 +444,71 @@ class Reader:
         if self.mine and not self.recorder.active:
             self.start_playlist([(self.mine, 0.0, None, None)], "▶ 播放我的录音")
 
+    # ---------- 逐句对比 ----------
+    def pairs(self):
+        """每句的 (标准起秒, 标准止秒, 我的 (起, 止) 或 None)；还不能逐句对比时返回 None。"""
+        if not (self.speech and self.mine and self.result):
+            return None
+        mine = sentence_ranges(self.speech.spans, self.result)
+        return [(a, b, m) for (a, b), m in zip(self.speech.times, mine)]
+
     def compare_play(self):
-        """标准一句、我的一句轮流放；没检查过就整段标准 + 整段我的。"""
-        if not (self.speech and self.mine) or self.recorder.active:
+        """「↔ 逐句对比」：从当前这句开始；还没检查过发音就先检查，检查完自动开始。"""
+        if not (self.speech and self.mine) or self.recorder.active or self.job:
             if not self.speech:
                 self.status.set("先点「▶ 朗读」生成标准读法，再对比")
             return
-        sp = self.speech
-        if self.result:
-            mine = sentence_ranges(sp.spans, self.result)
-            items = []
-            for i, ((a, b), m) in enumerate(zip(sp.times, mine)):
-                items.append((sp.path, a, b, i))
-                if m:
-                    items.append((self.mine, m[0], m[1], i))
-            self.start_playlist(items, "↔ 逐句对比：先标准，再你的")
+        if not self.result:
+            self.cmp_after_check = True
+            self.check()
+            return
+        n = len(self.pairs())
+        self.play_pair(0 if self.cmp_idx >= n - 1 and not self.cmp_playing else self.cmp_idx)
+
+    def play_pair(self, i):
+        """放第 i 句：先标准，再你的。"""
+        pairs = self.pairs()
+        if not pairs or self.recorder.active or self.job:
+            return
+        i = max(0, min(len(pairs) - 1, i))
+        a, b, m = pairs[i]
+        items = [(self.speech.path, a, b, i)]
+        if m:
+            items.append((self.mine, m[0], m[1], i))
+        self.cmp_idx = i
+        note = "" if m else "（你的录音里没找到这句，只放标准）"
+        self.start_playlist(items, f"↔ 逐句对比：第 {i + 1} / {len(pairs)} 句，先标准，再你的{note}")
+        self.cmp_playing = True
+        self.refresh()
+
+    def pair_done(self):
+        """这一句的「标准 → 你的」放完了：连续播放就接着下一句，否则停在这句等你选。"""
+        self.cmp_playing = False
+        n = len(self.pairs() or [])
+        i = self.cmp_idx
+        self.set_now(i)   # 停下来时也标出是哪一句
+        if self.cmp_auto.get() and i < n - 1:
+            self.status.set(f"第 {i + 1} 句对比完，马上放下一句……")
+            self.pl_wait = self.root.after(800, lambda: self.play_pair(i + 1))
+        elif i >= n - 1:
+            self.status.set(f"全部 {n} 句对比完了：可以「↻ 重听这句」，或「⏮ 上一句」往回听")
         else:
-            self.start_playlist([(sp.path, 0.0, None, None), (self.mine, 0.0, None, None)],
-                                "↔ 对比：先整段标准，再整段你的（检查过发音后可以逐句对比）")
+            self.status.set(f"第 {i + 1} 句对比完：「↻ 重听这句」再听一遍，或者「下一句 ⏭」")
+        self.refresh()
+
+    def on_cmp_auto(self):
+        self.settings["cmp_auto"] = self.cmp_auto.get()
+        intensive_listening.save_settings(self.settings)
+
+    def on_text_double_click(self, event):
+        """检查过发音后，双击文字框里的某一句，就从那一句开始对比。"""
+        if not self.pairs():
+            return
+        pos = len(self.text.get("1.0", f"@{event.x},{event.y}"))
+        for i, (a, b) in enumerate(self.speech.spans):
+            if a <= pos <= b:
+                self.root.after(10, lambda: self.play_pair(i))   # 等双击选中单词的默认动作做完
+                return
 
     # ---------- 检查发音 ----------
     def check(self):
@@ -477,6 +550,7 @@ class Reader:
 
     def clear_result(self):
         self.result = None
+        self.cmp_idx, self.cmp_after_check = 0, False
         self.text.tag_remove("miss", "1.0", "end")
         self.text.tag_remove("wrong", "1.0", "end")
         self.score.config(text="")
@@ -496,6 +570,9 @@ class Reader:
         self.pl_idx += 1
         if self.pl_idx >= len(self.playlist):
             self.playlist, self.pl_idx = [], -1
+            if self.cmp_playing:
+                self.pair_done()
+                return
             self.set_now(None)
             self.status.set("播放完了")
             self.refresh()
@@ -514,6 +591,7 @@ class Reader:
             self.root.after_cancel(self.pl_wait)
             self.pl_wait = None
         self.playlist, self.pl_idx = [], -1
+        self.cmp_playing = False
         self.player.stop()
         self.set_now(None)
         self.refresh()
@@ -567,7 +645,12 @@ class Reader:
                     if path == self.mine and text == self.get_text():
                         self.show_result(r)
                         self.status.set("检查完了：可以「↔ 逐句对比」，一句一句听差别")
+                        if self.cmp_after_check:   # 是点「逐句对比」触发的检查：接着开始对比
+                            self.cmp_after_check = False
+                            self.root.after(10, lambda: self.play_pair(0))
+                    self.cmp_after_check = False
                 elif kind == "job_error":
+                    self.cmp_after_check = False
                     self.status.set("出错了")
                     messagebox.showerror("出错了", msg)
                 else:   # job_end
@@ -604,6 +687,8 @@ class Reader:
                 self.pl_wait = self.root.after(gap, self.next_item)
             if self.job is None:
                 self.bar["value"] = 100 * pos / p.duration if p.duration else 0
+            if self.cmp_playing:
+                self.update_cmp_info()   # 「正在放：标准 / 你的」
         fmt = transcriber.App.fmt_time
         if self.speech and self.player.path == self.speech.path and self.playlist:
             self.std_time.set(f"{fmt(p.position)} / {fmt(p.duration)}")
@@ -644,6 +729,32 @@ class Reader:
         self.play_me_btn.config(state=st(self.mine and not rec))
         self.cmp_btn.config(state=st(self.mine and self.speech and not rec and not busy))
         self.check_btn.config(state=st(self.mine and has_text and not rec and not busy))
+        pairs = self.pairs()
+        ok = bool(pairs) and not rec and not busy
+        n, i = len(pairs or []), self.cmp_idx
+        b = self.cmp_buttons
+        b["prev"].config(state=st(ok and i > 0))
+        b["again"].config(state=st(ok))
+        b["next"].config(state=st(ok and i < n - 1))
+        b["stop"].config(state=st(self.cmp_playing or (pairs and self.pl_wait)))
+        self.cmp_bar.config(maximum=max(n, 1), value=(i + 1) if pairs else 0)
+        self.update_cmp_info()
+
+    def update_cmp_info(self):
+        pairs = self.pairs()
+        if not pairs:
+            hint = ("点「↔ 逐句对比」开始（会先检查发音）" if self.mine and self.speech
+                    else "朗读 + 录好自己的之后，可以逐句对比")
+            self.cmp_info.config(text=hint, style="Hint.TLabel")
+            return
+        i, n = self.cmp_idx, len(pairs)
+        text = f"第 {i + 1} / {n} 句"
+        if self.cmp_playing and 0 <= self.pl_idx < len(self.playlist):
+            part = "标准" if self.playlist[self.pl_idx][0] == self.speech.path else "你的"
+            text += f" · 正在放：{part}"
+        elif pairs[i][2] is None:
+            text += " · 你的录音里没找到这句"
+        self.cmp_info.config(text=text, style="TLabel")
         if tts.offline_ready():
             self.offline_lbl.config(text="离线语音 ✓ 已下载")
             self.offline_btn.pack_forget()

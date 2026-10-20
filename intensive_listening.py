@@ -79,6 +79,7 @@ DEFAULTS = {
     "tts_speed": 1.0,     # 语速倍数
     "tts_pause": 0.6,     # 句子之间停几秒
     "tts_engine": "auto",  # auto 在线优先 / edge 只用在线 / offline 只用离线
+    "cmp_auto": True,     # 「朗读」页逐句对比：一句对比完自动接着下一句
 }
 AUTO_DELAY_RANGE = (0.0, 30.0)
 SYSTEM_DEVICE = "跟随系统默认"
