@@ -10,7 +10,9 @@
        因为要靠检查结果才知道你的录音里每句在哪）。对比那一行可以
        ⏮ 上一句 / ↻ 重听这句 / 下一句 ⏭ / ■ 停止，进度条显示到第几句；
        勾「连续播放」一句完了自动接下一句，不勾就停在这句等你选；
-       也可以双击文字框里的某一句，直接对比那一句
+       也可以双击文字框里的某一句，直接对比那一句。
+       逐句对比时文字换成「一句一行」的逐句视图（行尾是这句读对的词数，点哪一行就对比哪一句），
+       点「✎ 返回编辑」回到可以修改的文字框
 语音合成见 tts.py（Edge 在线语音为主，Kokoro 离线语音备用）。
 """
 import difflib
@@ -155,25 +157,38 @@ class Reader:
         ebox.pack(side="left", padx=(6, 0))
         ebox.bind("<<ComboboxSelected>>", lambda e: (ebox.selection_clear(), self.on_option()))
 
-        # --- 文字框 ---
-        ttk.Label(parent, text=GUIDE, style="Hint.TLabel",
-                  padding=(P, 8, P, 2)).pack(fill="x")
+        # --- 文字框：平时是可以编辑的文字；逐句对比时换成「一句一行」的逐句视图 ---
+        guide = ttk.Frame(parent, padding=(P, 8, P, 2))
+        guide.pack(fill="x")
+        self.guide_lbl = ttk.Label(guide, text=GUIDE, style="Hint.TLabel")
+        self.guide_lbl.pack(side="left")
+        self.edit_btn = ttk.Button(guide, text="✎ 返回编辑", command=self.show_editor)
         tf = ttk.Frame(parent, padding=(P, 0, P, 0))
         tf.pack(fill="both", expand=True)
-        self.text = tk.Text(tf, wrap="word", font=(ui_style.TEXT_FONT, 13), undo=True,
-                            relief="flat", padx=10, pady=8, spacing1=3, spacing3=3, height=8,
-                            highlightthickness=1, highlightbackground=ui_style.DROP_BORDER,
-                            highlightcolor=ui_style.ACCENT)
-        sb = ttk.Scrollbar(tf, command=self.text.yview)
-        self.text.configure(yscrollcommand=sb.set)
-        self.text.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-        self.text.tag_configure("now", background="#fff3b0")
-        self.text.tag_configure("miss", background="#ffd6d6", foreground="#b42318",
-                                overstrike=True)
-        self.text.tag_configure("wrong", background="#ffe2b8", foreground="#9a4b00")
-        self.text.tag_raise("miss")
-        self.text.tag_raise("wrong")
+        self.edit_frame = ttk.Frame(tf)
+        self.edit_frame.pack(fill="both", expand=True)
+        self.list_frame = ttk.Frame(tf)   # 逐句视图，开始逐句对比时才显示
+        box = dict(wrap="word", font=(ui_style.TEXT_FONT, 13), relief="flat", padx=10, pady=8,
+                   height=8, highlightthickness=1, highlightbackground=ui_style.DROP_BORDER,
+                   highlightcolor=ui_style.ACCENT)
+        self.text = tk.Text(self.edit_frame, undo=True, spacing1=3, spacing3=3, **box)
+        self.lines = tk.Text(self.list_frame, spacing1=5, spacing3=5, cursor="hand2",
+                             state="disabled", **box)
+        for t, frame in ((self.text, self.edit_frame), (self.lines, self.list_frame)):
+            sb = ttk.Scrollbar(frame, command=t.yview)
+            t.configure(yscrollcommand=sb.set)
+            t.pack(side="left", fill="both", expand=True)
+            sb.pack(side="right", fill="y")
+            t.tag_configure("now", background="#fff3b0")
+            t.tag_configure("miss", background="#ffd6d6", foreground="#b42318", overstrike=True)
+            t.tag_configure("wrong", background="#ffe2b8", foreground="#9a4b00")
+            t.tag_raise("miss")
+            t.tag_raise("wrong")
+        self.lines.tag_configure("num", foreground=ui_style.MUTED, font=(ui_style.TEXT_FONT, 10))
+        self.lines.tag_configure("score", foreground="#9a4b00", font=(ui_style.TEXT_FONT, 10))
+        self.lines.tag_configure("score_ok", foreground=ui_style.OK, font=(ui_style.TEXT_FONT, 10))
+        self.lines.bind("<Button-1>", self.on_line_click)
+        self.view = "edit"   # "edit" = 编辑文字 / "list" = 逐句视图
         self.text.bind("<<Modified>>", self.on_text_modified)
 
         # --- 标准朗读 ---
@@ -256,6 +271,7 @@ class Reader:
         return self.text.get("1.0", "end-1c")
 
     def set_text(self, s):
+        self.show_editor()   # 换了文字：回到编辑视图
         self.text.delete("1.0", "end")
         self.text.insert("1.0", s)
         self.text.edit_reset()
@@ -489,6 +505,8 @@ class Reader:
         if m:
             items.append((self.mine, m[0], m[1], i))
         self.cmp_idx = i
+        if self.view != "list":
+            self.show_list()   # 逐句对比时一句一行地看
         note = "" if m else "（你的录音里没找到这句，只放标准）"
         self.start_playlist(items, f"↔ 逐句对比：第 {i + 1} / {len(pairs)} 句，先标准，再你的{note}")
         self.cmp_playing = True
@@ -522,6 +540,57 @@ class Reader:
             if a <= pos <= b:
                 self.root.after(10, lambda: self.play_pair(i))   # 等双击选中单词的默认动作做完
                 return
+
+    # ---------- 逐句视图（一句一行） ----------
+    LIST_GUIDE = "逐句视图：一句一行，点哪一行就对比哪一句   红色 = 漏读，橙色 = 读错，行尾 = 这句读对的词数"
+
+    def show_list(self):
+        """把文字一句一行地显示（只是换个显示方式，原文的分段、换行都不动）。"""
+        text = self.get_text()
+        r = self.result
+        L = self.lines
+        L.config(state="normal")
+        L.delete("1.0", "end")
+        for i, (a, b) in enumerate(tts.split_sentences(text)):
+            L.insert("end", f"{i + 1:>2}   ", "num")
+            start = L.index("end-1c")
+            L.insert("end", text[a:b].replace("\n", " "))   # 长度不变，下面的字符位置还对得上
+            if r:
+                ok = total = 0
+                for s, e, st in r["ref"]:
+                    if s >= a and e <= b:
+                        total += 1
+                        ok += st == "ok"
+                        if st != "ok":
+                            L.tag_add(st, f"{start}+{s - a}c", f"{start}+{e - a}c")
+                L.insert("end", f"   {ok}/{total}", "score_ok" if ok == total else "score")
+            L.insert("end", "\n")
+        L.config(state="disabled")
+        if self.view != "list":
+            self.view = "list"
+            self.edit_frame.pack_forget()
+            self.list_frame.pack(fill="both", expand=True)
+            self.guide_lbl.config(text=self.LIST_GUIDE)
+            self.edit_btn.pack(side="right")
+        self._mark(self.now_sentence)
+
+    def show_editor(self):
+        """「✎ 返回编辑」：回到可以修改的文字框。"""
+        if self.view == "edit":
+            return
+        self.view = "edit"
+        self.list_frame.pack_forget()
+        self.edit_frame.pack(fill="both", expand=True)
+        self.guide_lbl.config(text=GUIDE)
+        self.edit_btn.pack_forget()
+        self._mark(self.now_sentence)
+        self.text.focus_set()
+
+    def on_line_click(self, event):
+        line = int(self.lines.index(f"@{event.x},{event.y}").split(".")[0])
+        if self.pairs() and 1 <= line <= len(self.speech.spans):
+            self.play_pair(line - 1)
+        return "break"   # 不要把光标放进只读的逐句视图里
 
     # ---------- 检查发音 ----------
     def check(self):
@@ -560,6 +629,8 @@ class Reader:
             self.heard.insert("end", " ")
             self.heard.insert("end", w, () if st == "ok" else st)
         self.heard.config(state="disabled")
+        if self.view == "list":
+            self.show_list()   # 标红 / 标橙、每行的词数跟着更新
 
     def clear_result(self):
         self.result = None
@@ -570,6 +641,8 @@ class Reader:
         self.heard.config(state="normal")
         self.heard.delete("1.0", "end")
         self.heard.config(state="disabled")
+        if self.view == "list":
+            self.show_list()
 
     # ---------- 播放列表 ----------
     def start_playlist(self, items, msg):
@@ -614,8 +687,18 @@ class Reader:
         if i == self.now_sentence:
             return
         self.now_sentence = i
+        self._mark(i)
+
+    def _mark(self, i):
+        """在当前显示的那个视图里标出第 i 句（逐句视图里标整行）。"""
         self.text.tag_remove("now", "1.0", "end")
-        if i is not None and self.speech and i < len(self.speech.spans):
+        self.lines.tag_remove("now", "1.0", "end")
+        if i is None or not self.speech or i >= len(self.speech.spans):
+            return
+        if self.view == "list":
+            self.lines.tag_add("now", f"{i + 1}.0", f"{i + 2}.0")
+            self.lines.see(f"{i + 1}.0")
+        else:
             a, b = self.speech.spans[i]
             self.text.tag_add("now", f"1.0+{a}c", f"1.0+{b}c")
             self.text.see(f"1.0+{a}c")
