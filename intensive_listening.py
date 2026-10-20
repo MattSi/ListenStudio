@@ -73,6 +73,8 @@ DEFAULTS = {
     "speaker": None,
     "auto_next": False,   # 一句播完后自动播放下一句
     "auto_delay": 3.0,    # 自动播放下一句前等几秒
+    "rec_length": "60",   # 转录页录音时长："60" / "90" 秒，或 "custom" = 自定
+    "rec_custom_min": 5.0,  # 「自定」的分钟数
 }
 AUTO_DELAY_RANGE = (0.0, 30.0)
 SYSTEM_DEVICE = "跟随系统默认"

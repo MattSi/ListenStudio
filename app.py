@@ -80,11 +80,10 @@ class CombinedApp:
         self.nb.add(self.tx_tab, text="  转录 / 录音  ")
         self.nb.add(self.jt_tab, text="  精听  ")
 
-        # 识别模型两页共用：存在精听的设置（settings.json）里，在「⚙ 设置」里选
-        self.tx = transcriber.App(root, parent=self.tx_tab,
-                                  get_model=lambda: self.jt.opts["whisper_model"])
+        # 两页共用一份设置（settings.json）：识别模型在「⚙ 设置」里选，录音时长在转录页选
         opts = intensive_listening.load_settings()
         opts.update(overrides or {})
+        self.tx = transcriber.App(root, parent=self.tx_tab, settings=opts)
         self.jt = intensive_listening.Player(root, opts, parent=self.jt_tab)
         self.jt.active = False  # 先显示的是转录页
 
