@@ -3,3 +3,6 @@ numpy
 sounddevice
 pillow
 tkinterdnd2
+# 朗读页：Edge 在线语音 + Kokoro 离线语音（模型第一次用时在程序里下载）
+edge-tts
+kokoro-onnx

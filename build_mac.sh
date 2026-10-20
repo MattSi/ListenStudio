@@ -23,19 +23,24 @@ pip install -q -r requirements.txt pyinstaller
 python -c "import tkinter; tkinter.Tk().destroy()" || {
     echo "这个 Python 没有可用的 Tk，请装 python.org 的 Python，或 brew install python-tk"; exit 1; }
 
-# --collect-all：把拖放库 tkdnd、PortAudio、ffmpeg 动态库这些二进制一起打进去
+# --collect-all：把拖放库 tkdnd、PortAudio、ffmpeg 动态库、朗读用的 espeak-ng / onnxruntime
+# 这些二进制一起打进去；certifi 的证书让 Edge 在线语音的 HTTPS 连接在 .app 里也能用
 pyinstaller --noconfirm --clean --windowed \
     --name ListenStudio \
     --osx-bundle-identifier local.listenstudio \
     --collect-all tkinterdnd2 \
     --collect-all sounddevice \
     --collect-all av \
+    --collect-all espeakng_loader \
+    --collect-all kokoro_onnx \
+    --collect-all onnxruntime \
+    --collect-data certifi \
     app.py
 
 # 录音要用麦克风：macOS 要求 Info.plist 里写明用途，否则会直接拒绝访问
 PLIST=dist/ListenStudio.app/Contents/Info.plist
 plutil -replace NSMicrophoneUsageDescription \
-    -string "录音功能需要使用麦克风（录 60 / 90 秒音频用于转录和精听）。" "$PLIST"
+    -string "录音功能需要使用麦克风（录音转录、精听，以及朗读页录下自己的朗读来对比发音）。" "$PLIST"
 codesign --force --deep --sign - dist/ListenStudio.app   # 改过 Info.plist 要重新签名（本机自签）
 
 ARCH="$(uname -m)"   # arm64 = M 系列芯片，x86_64 = Intel

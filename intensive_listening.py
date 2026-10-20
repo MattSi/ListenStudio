@@ -75,6 +75,10 @@ DEFAULTS = {
     "auto_delay": 3.0,    # 自动播放下一句前等几秒
     "rec_length": "60",   # 转录页录音时长："60" / "90" 秒，或 "custom" = 自定
     "rec_custom_min": 5.0,  # 「自定」的分钟数
+    "tts_voice": "en-CA-ClaraNeural",  # 「朗读」页：语音（见 tts.VOICES）
+    "tts_speed": 1.0,     # 语速倍数
+    "tts_pause": 0.6,     # 句子之间停几秒
+    "tts_engine": "auto",  # auto 在线优先 / edge 只用在线 / offline 只用离线
 }
 AUTO_DELAY_RANGE = (0.0, 30.0)
 SYSTEM_DEVICE = "跟随系统默认"
