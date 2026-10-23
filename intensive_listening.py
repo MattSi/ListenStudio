@@ -688,7 +688,7 @@ class Player:
         self.detail = tk.Canvas(parent, height=140, bg="white", highlightthickness=1,
                                 highlightbackground=ui_style.DROP_BORDER, cursor="hand2")
         self.detail.pack(fill="both", expand=True, padx=P, pady=(4, 4))
-        self.overview = tk.Canvas(parent, height=60, bg="#fafafa", highlightthickness=1,
+        self.overview = tk.Canvas(parent, height=68, bg="#fafafa", highlightthickness=1,
                                   highlightbackground=ui_style.DROP_BORDER, cursor="hand2")
         self.overview.pack(fill="x", padx=P)
         for cv in (self.detail, self.overview):
@@ -1352,20 +1352,28 @@ class Player:
                            text=fmt(b / self.sr))
             self.detail_head = cv.create_line(-5, 0, -5, h, fill="#e5484d", width=2)
 
-        # 整段总览：浅色块是每一句，深色块是当前句
+        # 整段总览：浅色块是每一句；当前句 = 深色块 + 蓝框 + 蓝色波形 + 顶上的 ▼，句子多时也一眼能找到
         cv = self.overview
         cv.delete("all")
         w, h = cv.winfo_width(), cv.winfo_height()
         if w > 2:
-            mid = h / 2
-            for i, (a, b) in enumerate(self.segs):
-                cv.create_rectangle(self.to_x(a, w, 0, total), 2, self.to_x(b, w, 0, total),
-                                    h - 2, outline="",
-                                    fill="#9cc3ff" if i == self.cur else "#e1ecff")
+            top = 9  # 顶上留给 ▼ 的高度
+            mid = (top + h) / 2
+            for a, b in self.segs:
+                cv.create_rectangle(self.to_x(a, w, 0, total), top, self.to_x(b, w, 0, total),
+                                    h - 2, outline="", fill="#e1ecff")
+            xs, xe = self.to_x(s, w, 0, total), self.to_x(e, w, 0, total)
+            if xe - xs < 8:  # 句子太短时框至少 8 像素宽，不然看不见
+                c = (xs + xe) / 2
+                xs, xe = c - 4, c + 4
+            cv.create_rectangle(xs, top, xe, h - 2, fill="#a9c8ff", outline="#2a6fdb", width=2)
             pk = column_peaks(self.env, 0, len(self.env), w)
             for x, v in enumerate(pk):
-                y = v * (mid - 3)
-                cv.create_line(x, mid - y, x, mid + y + 1, fill="#5a6475")
+                y = v * (h - 2 - mid - 2)
+                cv.create_line(x, mid - y, x, mid + y + 1,
+                               fill="#1f5fd0" if xs <= x <= xe else "#7d8696")
+            c = min(max((xs + xe) / 2, 6), w - 6)  # 第一句 / 最后一句时 ▼ 不被边缘切掉
+            cv.create_polygon(c - 6, 0, c + 6, 0, c, top - 1, fill="#2a6fdb", outline="")
             self.overview_head = cv.create_line(-5, 0, -5, h, fill="#e5484d", width=2)
 
     @staticmethod
