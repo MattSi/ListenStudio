@@ -28,6 +28,7 @@ from tkinter import messagebox, ttk
 
 from tkinterdnd2 import TkinterDnD
 
+import audio_io
 import intensive_listening
 import reader
 import ui_style
@@ -108,7 +109,19 @@ class CombinedApp:
 
         self.nb.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         root.protocol("WM_DELETE_WINDOW", self.quit)
+        # 按钮 / 快捷键 / 定时器里没处理的错误：写进日志，并显示在当前页的状态行
+        audio_io.install_tk_hook(root, self.show_error)
+        audio_io.log.info("启动 %s", TITLE)
         self.update_send_buttons()
+
+    def show_error(self, msg):
+        cur = self.nb.select()
+        if cur == str(self.jt_tab):
+            self.jt.show_error(msg)
+        elif cur == str(self.rd_tab):
+            self.rd.status.set(msg)
+        else:
+            self.tx.status.set(msg)
 
     def update_send_buttons(self):
         """有文件才能送；转录页在录音时、或转录页正忙时不能收发。"""

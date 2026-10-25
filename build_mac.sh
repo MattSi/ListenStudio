@@ -41,6 +41,9 @@ pyinstaller --noconfirm --clean --windowed \
 PLIST=dist/ListenStudio.app/Contents/Info.plist
 plutil -replace NSMicrophoneUsageDescription \
     -string "录音功能需要使用麦克风（录音转录、精听，以及朗读页录下自己的朗读来对比发音）。" "$PLIST"
+# 关掉 App Nap：窗口不在前台时 macOS 会把程序"打盹"（定时器变慢、被挂起），
+# 精听的自动下一句倒计时、播放进度这些都靠定时器，打盹后回来会卡一下或不动
+plutil -replace NSAppSleepDisabled -bool YES "$PLIST"
 codesign --force --deep --sign - dist/ListenStudio.app   # 改过 Info.plist 要重新签名（本机自签）
 
 ARCH="$(uname -m)"   # arm64 = M 系列芯片，x86_64 = Intel

@@ -32,6 +32,7 @@ import numpy as np
 from tkinterdnd2 import DND_FILES
 
 import app_paths
+import audio_io
 import intensive_listening
 import ui_style
 
@@ -215,8 +216,9 @@ class Player:
             except ImportError:
                 raise RuntimeError("没有安装 sounddevice，请运行："
                                    "pip install sounddevice") from None
-            with sd.RawOutputStream(samplerate=self.SR, channels=self.CH,
-                                    dtype="int16") as stream:
+            # 打开失败会重新初始化音频再试一次；打开后播放期间不让别处重新初始化（见 audio_io）
+            with audio_io.call(sd.RawOutputStream, samplerate=self.SR, channels=self.CH,
+                               dtype="int16") as stream, audio_io.in_use():
                 while not stop.is_set():
                     if self._paused.is_set():
                         if stream.active:
@@ -331,12 +333,14 @@ class Recorder:
                 wav.writeframes(chunk)
 
         try:
-            self._stream = sd.RawInputStream(samplerate=self.SR, channels=1, dtype="int16",
-                                             callback=callback)
+            # 打开失败会重新初始化音频再试一次（见 audio_io）
+            self._stream = audio_io.call(sd.RawInputStream, samplerate=self.SR, channels=1,
+                                         dtype="int16", callback=callback)
         except Exception:
             wav.close()
             os.remove(path)
             raise
+        audio_io.busy_begin()  # 录音期间不让别处重新初始化音频
         self._wav, self._queue = wav, q
         self._writer = threading.Thread(target=write, daemon=True)
         self._writer.start()
@@ -346,8 +350,13 @@ class Recorder:
         """Stop (if still running), finish the WAV and return its path (None if empty)."""
         if not self._stream:
             return None
-        self._stream.stop()
-        self._stream.close()
+        try:
+            self._stream.stop()
+            self._stream.close()
+        except Exception:  # 麦克风中途没了：已经录到的照样保存
+            audio_io.log.exception("停止录音时出错")
+        finally:
+            audio_io.busy_end()
         self._stream = None
         self._queue.put(None)      # tell the writer it's done, then wait for it
         self._writer.join()

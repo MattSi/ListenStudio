@@ -3,6 +3,7 @@ recordings/
 settings.json
 jingting_settings.json
 reader_draft.txt
+listenstudio.log*
 
 # Python
 __pycache__/

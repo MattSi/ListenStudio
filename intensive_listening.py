@@ -12,6 +12,7 @@
   ← / →       上一句 / 下一句
   T           显示 / 隐藏字幕
   + / -       音量大 / 小（超过 100% 自动限幅，不爆音）
+  [ / ]       放慢 / 加快（0.5× ~ 1.5×，变速不变调）
 
 依赖：pip install av numpy sounddevice pillow tkinterdnd2
   字幕是可选功能（在"⚙ 设置"里打开），另需：pip install faster-whisper
@@ -40,6 +41,7 @@ from collections import deque
 from tkinter import filedialog, messagebox, ttk
 
 import app_paths
+import audio_io
 import ui_style
 
 import av
@@ -67,6 +69,7 @@ DEFAULTS = {
     "max_len": 6.0,       # 超过这么长（秒）的句子再切；0 = 不再切
     "pad": 0.15,          # 每句前后多留的时间（秒）
     "volume": 2.0,        # 音量倍数；超过 1 时自动限幅，不会爆音
+    "speed": 1.0,         # 播放速度（变速不变调）
     "subtitles": "off",   # 字幕：off 关闭 / always 一直显示 / after 听完再显示
     "whisper_model": "small.en",
     "mic": None,          # 麦克风 / 扬声器的名字；None = 跟随系统默认
@@ -246,6 +249,40 @@ def split_sentences(audio, sr, threshold_db=None, min_silence=0.35,
 
 
 # ---------- 音量 ----------
+# ---------- 播放速度 ----------
+SPEEDS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5]
+
+
+def speed_label(v):
+    return f"{v:g}×"
+
+
+def stretch(x, sr, rate):
+    """变速不变调：用 ffmpeg 的 atempo 滤镜（PyAV 自带），放慢时声音不会变低沉。
+    x 是 (采样数, 2) 的 float32；返回新的数组，长度约为 len(x) / rate。"""
+    if abs(rate - 1.0) < 1e-6:
+        return x
+    g = av.filter.Graph()
+    src = g.add_abuffer(format="flt", sample_rate=sr, layout="stereo")
+    tempo = g.add("atempo", f"{rate}")  # 单个 atempo 支持 0.5 ~ 2.0
+    sink = g.add("abuffersink")
+    src.link_to(tempo)
+    tempo.link_to(sink)
+    g.configure()
+    frame = av.AudioFrame.from_ndarray(np.ascontiguousarray(x, dtype=np.float32).reshape(1, -1),
+                                       format="flt", layout="stereo")
+    frame.sample_rate, frame.pts = sr, 0
+    g.push(frame)
+    g.push(None)  # 结束，把滤镜里剩下的也吐出来
+    out = []
+    while True:
+        try:
+            out.append(g.pull().to_ndarray().reshape(-1, 2))
+        except (av.error.EOFError, av.error.BlockingIOError, BlockingIOError):
+            break
+    return np.concatenate(out) if out else x
+
+
 def boost(x, sr, gain, ceiling=0.95):
     """放大 gain 倍，并用限幅器压住峰值：响的地方自动收一点，不会爆音。
     做法：每 5ms 一块算出"不超过 ceiling 需要的增益"，向前后各看 20ms 取最小值
@@ -561,6 +598,8 @@ class Player:
 
         ui_style.apply(root)
         apply_audio_devices(opts)
+        # 音频重新初始化（闲置太久 / 出错重试）后，把设置里选的麦克风 / 扬声器再设一遍
+        audio_io.on_reinit(lambda: apply_audio_devices(self.opts))
         P = ui_style.PAD
 
         # --- 工具栏（和转录页同一排版：左边打开文件，右边音量 / 设置） ---
@@ -582,6 +621,24 @@ class Player:
         self.vol_save_job = None
         self.set_volume(opts["volume"], save=False)
 
+        # 播放速度：变速不变调；[ 和 ] 键、在框上滚轮也能调
+        spd = ttk.Frame(top)
+        spd.pack(side="right", padx=(0, 16))
+        ttk.Label(spd, text="速度").pack(side="left", padx=(0, 6))
+        self.speed_var = tk.StringVar()
+        self.speed_box = ttk.Combobox(spd, textvariable=self.speed_var, state="readonly",
+                                      values=[speed_label(v) for v in SPEEDS], width=6,
+                                      takefocus=False)
+        self.speed_box.pack(side="left")
+
+        def on_speed(e):
+            self.set_speed(SPEEDS[self.speed_box.current()])
+            self.speed_box.selection_clear()
+            parent.focus_set()  # 焦点还给页面，空格等快捷键才继续有效
+        self.speed_box.bind("<<ComboboxSelected>>", on_speed)
+        self.play_ratio = 1.0  # 原始采样数 / 实际播放的采样数（变速后用来算进度线位置）
+        self.set_speed(opts["speed"], save=False)
+
         # --- 拖放区 ---
         self.drop = ui_style.drop_zone(parent, DROP_HINT)
         self.drop.pack(fill="x", padx=P)
@@ -600,7 +657,7 @@ class Player:
         self.status = tk.Label(parent, font=(UI_FONT, 11), fg=ui_style.OK)
         self.status.pack(pady=(6, 0))
         tk.Label(parent, fg=ui_style.MUTED, font=(UI_FONT, 9),
-                 text="空格 下一句 / 停止    R 重听    ← → 上下句    T 显示/隐藏字幕    + - 音量"
+                 text="空格 下一句 / 停止    R 重听    ← → 上下句    T 显示/隐藏字幕    + - 音量    [ ] 速度"
                  + ("" if self.embedded else "    Q 退出") + "\n"
                  "鼠标：点波形/画面重听，点总览跳到那一句；"
                  "在波形/画面上滚轮 = 上下句，在音量上滚轮 = 调音量"
@@ -715,6 +772,10 @@ class Player:
             self.bind_key(k, lambda: self.set_volume(self.opts["volume"] + 0.25))
         for k in ("-", "<KP_Subtract>"):
             self.bind_key(k, lambda: self.set_volume(self.opts["volume"] - 0.25))
+        self.bind_key("[", lambda: self.step_speed(-1))
+        self.bind_key("]", lambda: self.step_speed(+1))
+        for w in (spd, self.speed_box):  # 滚轮往上 = 快一档
+            self.bind_wheel(w, lambda step: self.step_speed(-step), throttle=0.1)
         if not self.embedded:  # 嵌入时由外面的程序负责退出
             for k in ("q", "Q", "<Escape>"):
                 self.bind_key(k, self.quit)
@@ -1227,16 +1288,60 @@ class Player:
                 self.root.after_cancel(self.vol_save_job)
             self.vol_save_job = self.root.after(800, lambda: save_settings(self.opts))
 
+    def set_speed(self, v, save=True):
+        """换播放速度。正在播放时用新速度从这句开头重放，马上就能听出差别。"""
+        v = min(SPEEDS, key=lambda x: abs(x - v))  # 对齐到最近的一档
+        self.opts["speed"] = v
+        self.speed_var.set(speed_label(v))
+        if save:
+            if getattr(self, "speed_save_job", None):
+                self.root.after_cancel(self.speed_save_job)
+            self.speed_save_job = self.root.after(800, lambda: save_settings(self.opts))
+            if getattr(self, "playing", False) or getattr(self, "pending", None):
+                self.play(self.cur)
+
+    def step_speed(self, step):
+        i = SPEEDS.index(self.opts["speed"]) + step
+        if 0 <= i < len(SPEEDS):
+            self.set_speed(SPEEDS[i])
+
+    def playing_msg(self):
+        v = self.opts["speed"]
+        return "▶ 播放中" if v == 1.0 else f"▶ 播放中（{speed_label(v)}）"
+
     def start_audio(self):
         self.pending = None
         s, e = self.segs[self.cur]
-        sd.play(boost(self.audio[s:e], self.sr, self.opts["volume"]), self.sr)
+        data = self.audio[s:e]
+        try:
+            data = stretch(data, self.sr, self.opts["speed"])
+        except Exception:  # 变速失败就按原速放，不影响听
+            audio_io.log.exception("变速失败，按原速播放")
+        self.play_ratio = (e - s) / max(1, len(data))
+        try:
+            # 出错会自动重新初始化音频再试一次（见 audio_io）
+            audio_io.call(sd.play, boost(data, self.sr, self.opts["volume"]), self.sr)
+        except audio_io.AudioError as ex:
+            self.playing = False
+            if self.video:
+                self.video.cancel()
+            self.show_error(str(ex))
+            return
         self.t0 = time.monotonic()
         self.playing = True
-        self.refresh("▶ 播放中")
+        self.refresh(self.playing_msg())
+
+    def show_error(self, msg):
+        """错误显示在状态行（红字），下一次 refresh 恢复正常颜色。"""
+        if self.segs:
+            self.refresh(msg)
+        self.status.config(text=msg, fg="#c33")
 
     def stop_all(self):
-        sd.stop()
+        try:
+            sd.stop()
+        except Exception:  # 设备已经没了也要能停：状态照样复位，下次播放会重新初始化
+            audio_io.log.exception("停止播放时出错")
         self.playing = False
         self.pending = None
         self.cancel_auto()
@@ -1251,11 +1356,27 @@ class Player:
             self.video.start(t, t, self.screen_box())
 
     def poll(self):
+        # 不管这一轮出了什么错，都要排好下一轮——以前一出错这个循环就永远停了，
+        # 之后播放状态再也不会更新，看起来就像按钮没反应
+        try:
+            self._poll_once()
+        except Exception:
+            audio_io.log.exception("poll 出错")
+        self.root.after(15 if self.video else 30, self.poll)
+
+    def stream_active(self):
+        try:
+            stream = sd.get_stream()
+            return stream is not None and stream.active
+        except Exception:  # 流所在的设备没了：当作已经放完
+            audio_io.log.exception("查询播放状态出错")
+            return False
+
+    def _poll_once(self):
         if self.pending and (self.video.frames or time.monotonic() > self.pending[1]):
             self.start_audio()
         if self.playing:
-            stream = sd.get_stream()
-            if stream is None or not stream.active:
+            if not self.stream_active():
                 self.playing = False
                 if self.video:
                     self.video.cancel()  # 画面停在最后显示的那一帧
@@ -1269,7 +1390,7 @@ class Player:
                     self.refresh("⏸ 已暂停，按空格继续")
             else:
                 s, e = self.segs[self.cur]
-                pos = min(e, s + (time.monotonic() - self.t0) * self.sr)
+                pos = min(e, s + (time.monotonic() - self.t0) * self.sr * self.play_ratio)  # 变速后按比例换算回原音频位置
                 self.move_playhead(pos)
                 if self.video:
                     self.show_due_frame(pos / self.sr)
@@ -1278,7 +1399,6 @@ class Player:
             self.video.frames.clear()
         if self.auto_job and not self.playing:
             self.status.config(text=self.auto_msg())  # 倒计时：每次刷新剩下的秒数
-        self.root.after(15 if self.video else 30, self.poll)
 
     def auto_msg(self):
         left = max(0.0, self.auto_due - time.monotonic())
@@ -1318,7 +1438,7 @@ class Player:
         self.big.config(text=f"第 {self.cur + 1} / {len(self.segs)} 句")
         self.info.config(text=f"{fmt(s / self.sr)} – {fmt(e / self.sr)}"
                               f"（{(e - s) / self.sr:.1f} 秒）")
-        self.status.config(text=msg)
+        self.status.config(text=msg, fg=ui_style.OK)
         self.update_sub()
         self.update_buttons()
         self.draw_waves()
