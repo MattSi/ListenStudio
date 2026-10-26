@@ -1,25 +1,33 @@
-"""听写 & 精听（ListenStudio）—— 程序的唯一入口。
+"""ListenStudio (听写 & 精听) - the single entry point of the program.
 
-三个标签页：
-  转录 / 录音  transcriber.py：拖入音频 → Whisper 转文字（带时间戳）、播放、录音、另存音频
-  精听        intensive_listening.py：自动断句、每句播完暂停、波形、视频、字幕
-  朗读        reader.py：把自己写的英文读出来（tts.py），录自己读一遍，检查发音、逐句对比
-转录和精听可以互相送文件：转录页「送去精听 ▸」，精听页「◂ 送去转录」。
-切换标签页时，离开的那一页会自动停止播放。
-设置存在 settings.json，录音存在 recordings/（打包后的位置见 app_paths.py）。
+Three tabs:
+  转录 / 录音 (Transcribe / Record)  transcriber.py: drop in audio -> Whisper turns it into
+               text with timestamps; play, record, save audio as another format
+  精听 (Intensive listening)  intensive_listening.py: splits into sentences, pauses after
+               each one; waveform, video, subtitles
+  朗读 (Read aloud)  reader.py: reads your own English text aloud (tts.py), records you
+               reading it, checks pronunciation, compares sentence by sentence
+Transcribe and Intensive listening can send files to each other: the "送去精听 ▸" button
+on the transcribe tab and the "◂ 送去转录" button on the listening tab.
+When you switch tabs, the tab you leave stops playing.
+Settings are stored in settings.json, recordings in recordings/
+(where they go in the packaged app: see app_paths.py).
 
-用法：
-  python app.py                                  # 打开窗口，把音频拖进去
-  python app.py 听力2-1_part_6.m4a               # 打开时直接载入这个文件
-  精听的断句参数平时在「⚙ 设置」里改；命令行写了的只对这一次生效：
-  python app.py 文件.m4a --min-silence 0.25      # 断得更细（按意群）
-  python app.py 文件.m4a --max-len 10            # 允许更长的句子（默认超过 6 秒再切）
-  python app.py 文件.m4a --threshold -30         # 手动指定静音阈值（默认按底噪自动定）
+Usage:
+  python app.py                                  # open the window, then drop audio in
+  python app.py 听力2-1_part_6.m4a               # open and load this file right away
+  Sentence-split options are normally changed in "⚙ 设置" (Settings);
+  options given on the command line only apply to this run:
+  python app.py 文件.m4a --min-silence 0.25      # split finer (by phrase)
+  python app.py 文件.m4a --max-len 10            # allow longer sentences (default: split above 6 s)
+  python app.py 文件.m4a --threshold -30         # set the silence threshold by hand (default: from the noise floor)
 
-依赖：pip install tkinterdnd2 sounddevice av numpy pillow
-     转录和精听字幕另需 faster-whisper（openai-whisper 也行）：装在这个 Python 里，或者装在电脑上另一个 Python 里
-     （打包的 .app 就是这样：会自动去找，见 intensive_listening.find_external_python）。
-     不需要 ffmpeg / ffprobe 命令行工具（音频都用 PyAV 处理）。
+Dependencies: pip install tkinterdnd2 sounddevice av numpy pillow
+     Transcription and subtitles also need faster-whisper (openai-whisper also works),
+     either in this Python or in another Python on the computer
+     (the packaged .app works this way: it finds it by itself, see
+     intensive_listening.find_external_python).
+     The ffmpeg / ffprobe command-line tools are not needed (all audio goes through PyAV).
 """
 import argparse
 import os
@@ -38,7 +46,7 @@ TITLE = "听写 & 精听"
 
 
 class Tooltip:
-    """鼠标停在控件上 0.5 秒后显示一个小说明框，移开就消失。"""
+    """Show a small help box after the mouse rests on a widget for 0.5 s; hide it when the mouse leaves."""
 
     def __init__(self, widget, text):
         self.widget, self.text = widget, text
@@ -71,7 +79,7 @@ class Tooltip:
 
 class CombinedApp:
     def __init__(self, root, overrides=None):
-        """overrides：命令行给的精听断句参数，只对这一次生效。"""
+        """overrides: sentence-split options from the command line; they only apply to this run."""
         self.root = root
         root.title(TITLE)
         root.geometry("1000x800")
@@ -84,20 +92,20 @@ class CombinedApp:
         self.nb.add(self.jt_tab, text="  精听  ")
         self.nb.add(self.rd_tab, text="  朗读  ")
 
-        # 两页共用一份设置（settings.json）：识别模型在「⚙ 设置」里选，录音时长在转录页选
+        # Both tabs share one settings dict (settings.json): the recognition model is chosen in "⚙ 设置", the recording length on the transcribe tab
         opts = intensive_listening.load_settings()
         opts.update(overrides or {})
         self.tx = transcriber.App(root, parent=self.tx_tab, settings=opts)
         self.jt = intensive_listening.Player(root, opts, parent=self.jt_tab)
-        self.jt.active = False  # 先显示的是转录页
+        self.jt.active = False  # The transcribe tab is shown first
         self.rd = reader.Reader(root, self.rd_tab, opts,
                                 mic_busy=lambda: self.tx.recorder.active)
 
-        # 转录页也能打开设置（同一个窗口；麦克风 / 扬声器在里面选）
+        # The transcribe tab can open the settings too (same window; mic / speaker are chosen there)
         ttk.Button(self.tx.top, text="⚙ 设置", command=self.jt.open_settings).pack(
             side="right", padx=(4, 0), before=self.tx.save_audio_btn)
 
-        # 互相送文件的按钮（没有文件时变灰）
+        # Buttons that send the file to the other tab (greyed out when there is no file)
         self.to_jt_btn = ttk.Button(self.tx.top, text="送去精听 ▸",
                                     command=self.send_to_listening)
         self.to_jt_btn.pack(side="right", padx=(0, 4))
@@ -109,7 +117,7 @@ class CombinedApp:
 
         self.nb.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         root.protocol("WM_DELETE_WINDOW", self.quit)
-        # 按钮 / 快捷键 / 定时器里没处理的错误：写进日志，并显示在当前页的状态行
+        # Errors not handled in buttons / shortcuts / timers: write them to the log and show them in the current tab's status line
         audio_io.install_tk_hook(root, self.show_error)
         audio_io.log.info("启动 %s", TITLE)
         self.update_send_buttons()
@@ -124,7 +132,7 @@ class CombinedApp:
             self.tx.status.set(msg)
 
     def update_send_buttons(self):
-        """有文件才能送；转录页在录音时、或转录页正忙时不能收发。"""
+        """Sending needs a file; nothing can be sent while the transcribe tab is recording or busy."""
         tx = self.tx
         ok_jt = bool(tx.current_file) and not tx.recorder.active
         ok_tx = bool(self.jt.path) and not tx._busy and not tx.recorder.active
@@ -132,9 +140,9 @@ class CombinedApp:
         self.to_tx_btn.config(state="normal" if ok_tx else "disabled")
         self.root.after(300, self.update_send_buttons)
 
-    # ---------- 标签页切换 ----------
+    # ---------- Switching tabs ----------
     def on_tab_changed(self, event=None):
-        """切换标签页：别的页停止 / 暂停播放，免得两边同时出声。"""
+        """On tab switch: stop / pause playback on the other tabs, so two tabs never play at once."""
         cur = self.nb.select()
         self.jt.active = cur == str(self.jt_tab)
         self.rd.active = cur == str(self.rd_tab)
@@ -144,11 +152,11 @@ class CombinedApp:
             self.jt.stop_all()
             self.jt.refresh("已停止")
         if not self.rd.active:
-            self.rd.shutdown()   # 停播放；在录「我的朗读」的话就停下并保存
+            self.rd.shutdown()   # Stop playback; if "my reading" is being recorded, stop and save it
         if self.jt.active:
-            self.jt_tab.focus_set()  # 焦点离开文字框，精听的空格等快捷键才不会打进去
+            self.jt_tab.focus_set()  # Move focus out of the text box, so the listening tab's Space etc. are not typed into it
 
-    # ---------- 互送文件 ----------
+    # ---------- Sending files between tabs ----------
     def send_to_listening(self):
         path = self.tx.current_file
         if not path:
@@ -172,9 +180,9 @@ class CombinedApp:
         self.tx.status.set(f"从精听送来：{os.path.basename(path)} - 点 Start 开始转录")
 
     def quit(self):
-        self.tx.shutdown()   # 停止播放；录了一半的音也会存下来
+        self.tx.shutdown()   # Stop playback; a half-finished recording is saved too
         self.jt.stop_all()
-        self.rd.shutdown()   # 同上，并保存「朗读」页的草稿
+        self.rd.shutdown()   # Same as above, and save the draft on the 朗读 (Read aloud) tab
         self.root.destroy()
 
 
@@ -182,7 +190,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="听写 & 精听：Whisper 转录 / 录音 + 自动断句精听")
     p.add_argument("file", nargs="?",
                    help="音频或视频文件（m4a / mp3 / wav / mp4 等）；不填就打开窗口拖文件进去")
-    # 精听的断句参数平时在窗口的"设置"里改；命令行写了的只对这一次生效
+    # Sentence-split options are normally changed in the window's Settings; options given on the command line only apply to this run
     S = argparse.SUPPRESS
     p.add_argument("--threshold", type=float, default=S,
                    help="静音阈值 dB（相对峰值）。默认按本底噪声自动定；"
@@ -202,7 +210,7 @@ def main(argv=None):
     root = TkinterDnD.Tk()
     app = CombinedApp(root, overrides)
     if file:
-        # 两页都载入：转录页选中它，精听页开始断句（命令行参数主要是给精听用的）
+        # Load the file in both tabs: select it on the transcribe tab, start splitting it on the listening tab (command-line options are mainly for listening)
         app.tx.select(file)
         app.nb.select(app.jt_tab)
         app.jt.open_file(file)

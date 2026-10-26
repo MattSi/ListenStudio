@@ -1,4 +1,4 @@
-# 个人数据：录音、本机设置
+# Personal data: recordings, local settings, log
 recordings/
 settings.json
 jingting_settings.json
@@ -10,11 +10,11 @@ __pycache__/
 *.py[cod]
 .venv*/
 
-# 打包产物（build_mac.sh / PyInstaller）
+# Build output (build_mac.sh / PyInstaller)
 build/
 dist/
 *.spec
 
-# 系统文件
+# System files
 .DS_Store
 Thumbs.db

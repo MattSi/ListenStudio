@@ -1,19 +1,22 @@
-"""「朗读」页：把自己写的英文答案读出来听，再录自己读一遍来对比发音。
+"""The 朗读 (Read aloud) tab: hear your own English answer read aloud, then record yourself reading it and compare pronunciation.
 
-用法：
-  ① 在文字框里写或粘贴英文（自动保存草稿，下次打开还在）
-  ② 「▶ 朗读」：用选好的语音 / 语速读出来，正在读的那句会高亮
-  ③ 「● 录我的朗读」：自己读一遍（最长 10 分钟，点「停止录音」结束）
-  ④ 「✓ 检查发音」：用 Whisper 听你的录音，和原文逐词对比：
-       漏读的词标红，读得不对（被听成别的词）的标橙，再给一个读对的比例；
-     「↔ 逐句对比」：一句一句地先放标准、再放你的（还没检查过会先自动检查，
-       因为要靠检查结果才知道你的录音里每句在哪）。对比那一行可以
-       ⏮ 上一句 / ↻ 重听这句 / 下一句 ⏭ / ■ 停止，进度条显示到第几句；
-       勾「连续播放」一句完了自动接下一句，不勾就停在这句等你选；
-       也可以双击文字框里的某一句，直接对比那一句。
-       逐句对比时文字换成「一句一行」的逐句视图（行尾是这句读对的词数，点哪一行就对比哪一句），
-       点「✎ 返回编辑」回到可以修改的文字框
-语音合成见 tts.py（Edge 在线语音为主，Kokoro 离线语音备用）。
+How to use:
+  1. Write or paste English into the text box (the draft is saved automatically and is still there next time).
+  2. "▶ 朗读": read it with the chosen voice / rate; the sentence being read is highlighted.
+  3. "● 录我的朗读": record yourself reading it (up to 10 minutes; click "停止录音" to finish).
+  4. "✓ 检查发音": Whisper listens to your recording and compares it word by word with the text:
+       skipped words are marked red, wrong words (heard as a different word) orange,
+       plus the share of words read correctly.
+     "↔ 逐句对比" (compare by sentence): plays the reference sentence, then yours, one by one
+       (if not checked yet, it checks first, because the check result tells where each
+       sentence is in your recording). The compare row has
+       ⏮ previous / ↻ replay this one / next ⏭ / ■ stop, and a progress bar for the sentence number;
+       with "连续播放" (continuous) ticked it moves on by itself, otherwise it stops and waits;
+       you can also double-click a sentence in the text box to compare that sentence.
+       While comparing, the text switches to a one-sentence-per-line view (the end of each
+       line shows how many words of it were right; click a line to compare that sentence);
+       "✎ 返回编辑" goes back to the editable text box.
+Speech synthesis: see tts.py (Edge online voices first, Kokoro offline voices as backup).
 """
 import difflib
 import os
@@ -30,7 +33,7 @@ import transcriber
 import tts
 import ui_style
 
-REC_LIMIT = 600   # 「录我的朗读」最长 10 分钟
+REC_LIMIT = 600   # "录我的朗读" (record my reading) is limited to 10 minutes
 MY_REC_DIR = os.path.join(app_paths.RECORDINGS_DIR, "reader")
 GUIDE = "① 写好英文（或粘贴）  ② ▶ 朗读，听标准读法  ③ ● 录下自己读一遍  ④ ✓ 检查发音 / ↔ 逐句对比"
 
@@ -42,12 +45,12 @@ def _norm(w):
 
 
 def compare_reading(text, heard):
-    """把 Whisper 听到的词（[(开始秒, 结束秒, 词), ...]）和原文逐词对齐。
-    返回 dict：
-      ref:     原文每个词 (起, 止字符, 状态)，状态 ok / wrong（读成了别的词）/ miss（漏读）
-      hyp:     听到的每个词 (词, 状态)，状态 ok / wrong / extra（原文里没有）
-      ref_time:原文每个词在录音里大概的 (起, 止) 秒；对不上的是 None
-      correct / total / miss / wrong / extra：统计"""
+    """Align the words Whisper heard ([(start s, end s, word), ...]) with the text, word by word.
+    Returns a dict:
+      ref:     each word of the text (start, end char, state); state ok / wrong (read as another word) / miss (skipped)
+      hyp:     each word heard (word, state); state ok / wrong / extra (not in the text)
+      ref_time:each text word's rough (start, end) seconds in the recording; None if it didn't match
+      correct / total / miss / wrong / extra: counts"""
     ref = [(m.start(), m.end(), _norm(m.group())) for m in _WORD.finditer(text)]
     hyp = []
     for s, e, w in heard:
@@ -63,7 +66,7 @@ def compare_reading(text, heard):
                 ref_state[i1 + k] = hyp_state[j1 + k] = "ok"
                 ref_time[i1 + k] = hyp[j1 + k][:2]
         elif op == "replace":
-            span = (hyp[j1][0], hyp[j2 - 1][1])   # 这几个词大概在录音的这一段
+            span = (hyp[j1][0], hyp[j2 - 1][1])   # These words are roughly in this part of the recording
             for i in range(i1, i2):
                 ref_state[i], ref_time[i] = "wrong", span
             for j in range(j1, j2):
@@ -79,7 +82,7 @@ def compare_reading(text, heard):
 
 
 def sentence_ranges(spans, result, pad=0.15):
-    """每句原文在我的录音里的 (起, 止) 秒（按这句里对上的词算）；一个词都没对上就是 None。"""
+    """Each text sentence's (start, end) seconds in my recording (from the words that matched); None if no word matched."""
     out = []
     for a, b in spans:
         ts = [t for (s, e, _), t in zip(result["ref"], result["ref_time"])
@@ -91,20 +94,20 @@ def sentence_ranges(spans, result, pad=0.15):
 
 class Reader:
     def __init__(self, root, parent, settings, mic_busy=lambda: False):
-        """settings：和另外两页共用的设置字典（settings.json）；
-        mic_busy()：转录页正在录音时返回 True（麦克风只能给一边用）。"""
+        """settings: the settings dict shared with the other two tabs (settings.json);
+        mic_busy(): returns True while the transcribe tab is recording (only one side can use the mic)."""
         self.root, self.settings, self.mic_busy = root, settings, mic_busy
         self.active = False
         self.player = transcriber.Player()
         self.recorder = transcriber.Recorder()
-        self.speech = None      # tts.Speech：当前文字的标准朗读
-        self.mine = None        # 我的录音文件
-        self.result = None      # compare_reading 的结果（对应 self.mine 和当时的文字）
-        self.playlist = []      # [(文件, 起秒, 止秒, 第几句)]：逐句对比 / 整段播放
+        self.speech = None      # tts.Speech: the reference reading of the current text
+        self.mine = None        # My recording file
+        self.result = None      # Result of compare_reading (matches self.mine and the text at that time)
+        self.playlist = []      # [(file, start s, end s, sentence no.)]: compare by sentence / play the whole thing
         self.pl_idx = -1
-        self.pl_wait = None     # 两段之间停一下的 after 任务
+        self.pl_wait = None     # after() job for the short pause between two parts
         self.now_sentence = None
-        self.job = None         # 正在后台做的事："synth" / "check" / "download"
+        self.job = None         # What is running in the background: "synth" / "check" / "download"
         self.cancel_ev = threading.Event()
         self.events = queue.Queue()
         self.draft_job = None
@@ -113,7 +116,7 @@ class Reader:
         P = ui_style.PAD
         BW = 13
 
-        # --- 工具栏：文字文件 + 离线语音 ---
+        # --- Toolbar: text file + offline voice ---
         top = self.top = ttk.Frame(parent, padding=(P, P, P, 0))
         top.pack(fill="x")
         ttk.Button(top, text="打开文本…", command=self.open_text).pack(side="left")
@@ -124,7 +127,7 @@ class Reader:
         self.offline_lbl = ttk.Label(top, style="Hint.TLabel")
         self.offline_lbl.pack(side="right", padx=(0, 6))
 
-        # --- 语音选项 ---
+        # --- Voice options ---
         opt = ttk.Frame(parent, padding=(P, 8, P, 0))
         opt.pack(fill="x")
         ttk.Label(opt, text="语音").pack(side="left")
@@ -157,7 +160,7 @@ class Reader:
         ebox.pack(side="left", padx=(6, 0))
         ebox.bind("<<ComboboxSelected>>", lambda e: (ebox.selection_clear(), self.on_option()))
 
-        # --- 文字框：平时是可以编辑的文字；逐句对比时换成「一句一行」的逐句视图 ---
+        # --- Text box: normally editable text; while comparing, switches to a one-sentence-per-line view ---
         guide = ttk.Frame(parent, padding=(P, 8, P, 2))
         guide.pack(fill="x")
         self.guide_lbl = ttk.Label(guide, text=GUIDE, style="Hint.TLabel")
@@ -167,7 +170,7 @@ class Reader:
         tf.pack(fill="both", expand=True)
         self.edit_frame = ttk.Frame(tf)
         self.edit_frame.pack(fill="both", expand=True)
-        self.list_frame = ttk.Frame(tf)   # 逐句视图，开始逐句对比时才显示
+        self.list_frame = ttk.Frame(tf)   # Sentence view, only shown while comparing by sentence
         box = dict(wrap="word", font=(ui_style.TEXT_FONT, 13), relief="flat", padx=10, pady=8,
                    height=8, highlightthickness=1, highlightbackground=ui_style.DROP_BORDER,
                    highlightcolor=ui_style.ACCENT)
@@ -188,10 +191,10 @@ class Reader:
         self.lines.tag_configure("score", foreground="#9a4b00", font=(ui_style.TEXT_FONT, 10))
         self.lines.tag_configure("score_ok", foreground=ui_style.OK, font=(ui_style.TEXT_FONT, 10))
         self.lines.bind("<Button-1>", self.on_line_click)
-        self.view = "edit"   # "edit" = 编辑文字 / "list" = 逐句视图
+        self.view = "edit"   # "edit" = editing text / "list" = sentence view
         self.text.bind("<<Modified>>", self.on_text_modified)
 
-        # --- 标准朗读 ---
+        # --- Reference reading ---
         std = ttk.Frame(parent, padding=(P, P, P, 0))
         std.pack(fill="x")
         self.read_btn = ttk.Button(std, text="▶ 朗读", width=BW, command=self.read_aloud)
@@ -205,7 +208,7 @@ class Reader:
         self.bar = ttk.Progressbar(std, mode="determinate", maximum=100)
         self.bar.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        # --- 我的朗读 ---
+        # --- My reading ---
         me = ttk.Frame(parent, padding=(P, 8, P, 0))
         me.pack(fill="x")
         self.rec_btn = ttk.Button(me, text="● 录我的朗读", width=BW, command=self.toggle_record)
@@ -222,7 +225,7 @@ class Reader:
         self.me_time = tk.StringVar(value="")
         ttk.Label(me, textvariable=self.me_time, width=16, anchor="e").pack(side="right")
 
-        # --- 逐句对比：标准一句、你的一句；可以重听、换句、连续播放 ---
+        # --- Compare by sentence: one reference sentence, then yours; can replay, change sentence, play continuously ---
         cmp = ttk.Frame(parent, padding=(P, 8, P, 0))
         cmp.pack(fill="x")
         self.cmp_buttons = {}
@@ -240,12 +243,12 @@ class Reader:
         self.cmp_info.pack(side="right", padx=(8, 8))
         self.cmp_bar = ttk.Progressbar(cmp, mode="determinate", maximum=1)
         self.cmp_bar.pack(side="left", fill="x", expand=True, padx=(8, 0))
-        self.cmp_idx = 0          # 逐句对比现在在第几句
-        self.cmp_playing = False  # 正在放这一句的「标准 → 你的」
-        self.cmp_pending = False  # 点了逐句对比、正在先补合成 / 检查：做完自动开始对比
+        self.cmp_idx = 0          # Which sentence the comparison is on now
+        self.cmp_playing = False  # Playing this sentence's "reference -> yours"
+        self.cmp_pending = False  # Compare was clicked and synthesis / checking is being done first: start comparing when it's done
         self.text.bind("<Double-Button-1>", self.on_text_double_click, add="+")
 
-        # --- 检查结果 ---
+        # --- Check results ---
         res = ttk.Frame(parent, padding=(P, 8, P, 0))
         res.pack(fill="x")
         self.score = ttk.Label(res, text="", font=(ui_style.FONT, 11, "bold"))
@@ -266,12 +269,12 @@ class Reader:
         self.refresh()
         root.after(100, self.poll)
 
-    # ---------- 文字 ----------
+    # ---------- Text ----------
     def get_text(self):
         return self.text.get("1.0", "end-1c")
 
     def set_text(self, s):
-        self.show_editor()   # 换了文字：回到编辑视图
+        self.show_editor()   # The text changed: go back to the edit view
         self.text.delete("1.0", "end")
         self.text.insert("1.0", s)
         self.text.edit_reset()
@@ -296,7 +299,7 @@ class Reader:
         if not self.text.edit_modified():
             return
         self.text.edit_modified(False)
-        # 文字改了：标准朗读和检查结果都对不上了
+        # The text was edited: the reference reading and the check result no longer match it
         if self.speech or self.result:
             self.stop()
             self.speech = None
@@ -326,7 +329,7 @@ class Reader:
             return
         self.set_text("")
 
-    # ---------- 选项 ----------
+    # ---------- Options ----------
     def options(self):
         voice = next((v for v in tts.VOICE_IDS if tts.VOICE_NAMES[v] == self.voice_var.get()),
                      tts.VOICE_IDS[0])
@@ -338,7 +341,7 @@ class Reader:
         try:
             v = round(min(rng[1], max(rng[0], float(var.get()))), 2)
         except ValueError:
-            v = self.settings[key]   # 不是数字：恢复原来的值
+            v = self.settings[key]   # Not a number: restore the old value
         var.set(f"{v:g}")
         return v
 
@@ -348,12 +351,12 @@ class Reader:
         if any(self.settings[k] != v for k, v in new.items()):
             self.settings.update(new)
             intensive_listening.save_settings(self.settings)
-            if self.speech:   # 换了声音 / 语速，下次朗读重新合成
+            if self.speech:   # Voice / rate changed: synthesize again on the next reading
                 self.stop()
                 self.speech = None
         self.refresh()
 
-    # ---------- 标准朗读 ----------
+    # ---------- Reference reading ----------
     def read_aloud(self):
         if self.job or self.recorder.active:
             return
@@ -398,7 +401,7 @@ class Reader:
         except Exception as e:
             messagebox.showerror("保存失败", str(e))
 
-    # ---------- 离线语音 ----------
+    # ---------- Offline voice ----------
     def download_offline(self):
         if self.job or tts.offline_ready():
             return
@@ -421,7 +424,7 @@ class Reader:
         except Exception as e:
             self.events.put(("job_error", f"离线语音没能下载：{e}"))
 
-    # ---------- 我的朗读 ----------
+    # ---------- My reading ----------
     def toggle_record(self):
         if self.recorder.active:
             self.finish_record()
@@ -431,7 +434,7 @@ class Reader:
         if self.mic_busy():
             self.status.set("转录页正在录音，等它录完再录")
             return
-        self.stop()   # 不要把喇叭里的声音也录进去
+        self.stop()   # Don't record the sound from the speakers too
         path = os.path.join(MY_REC_DIR, time.strftime("me_%Y%m%d_%H%M%S.wav"))
         try:
             self.recorder.start(REC_LIMIT, path)
@@ -460,17 +463,17 @@ class Reader:
         if self.mine and not self.recorder.active:
             self.start_playlist([(self.mine, 0.0, None, None)], "▶ 播放我的录音")
 
-    # ---------- 逐句对比 ----------
+    # ---------- Compare by sentence ----------
     def pairs(self):
-        """每句的 (标准起秒, 标准止秒, 我的 (起, 止) 或 None)；还不能逐句对比时返回 None。"""
+        """Each sentence's (reference start s, reference end s, mine (start, end) or None); None if comparing isn't possible yet."""
         if not (self.speech and self.mine and self.result):
             return None
         mine = sentence_ranges(self.speech.spans, self.result)
         return [(a, b, m) for (a, b), m in zip(self.speech.times, mine)]
 
     def compare_play(self):
-        """「↔ 逐句对比」：缺什么先自动补上——还没有标准朗读就先合成，还没检查过发音就先检查——
-        然后从当前这句开始对比。"""
+        """"↔ 逐句对比" (compare by sentence): first fill in whatever is missing - synthesize the reference
+        reading if there is none, check pronunciation if not checked yet - then compare from the current sentence."""
         if self.recorder.active or self.job:
             return
         text = self.get_text()
@@ -480,13 +483,13 @@ class Reader:
         if not text.strip():
             self.status.set("文字框是空的，没法对比")
             return
-        if not self.speech:   # 第 1 步：合成标准朗读（合成完不播放，接着往下做）
+        if not self.speech:   # Step 1: synthesize the reference reading (don't play it when done; go on to the next step)
             self.cmp_pending = True
             self.stop()
             voice, speed, pause, engine = self.options()
             self.start_job("synth", self._synth_worker, text, voice, speed, pause, engine)
             return
-        if not self.result:   # 第 2 步：检查发音（要靠它才知道你的录音里每句在哪）
+        if not self.result:   # Step 2: check pronunciation (needed to know where each sentence is in your recording)
             self.cmp_pending = True
             self.check()
             return
@@ -495,7 +498,7 @@ class Reader:
         self.play_pair(0 if self.cmp_idx >= n - 1 and not self.cmp_playing else self.cmp_idx)
 
     def play_pair(self, i):
-        """放第 i 句：先标准，再你的。"""
+        """Play sentence i: reference first, then yours."""
         pairs = self.pairs()
         if not pairs or self.recorder.active or self.job:
             return
@@ -506,18 +509,18 @@ class Reader:
             items.append((self.mine, m[0], m[1], i))
         self.cmp_idx = i
         if self.view != "list":
-            self.show_list()   # 逐句对比时一句一行地看
+            self.show_list()   # While comparing, view one sentence per line
         note = "" if m else "（你的录音里没找到这句，只放标准）"
         self.start_playlist(items, f"↔ 逐句对比：第 {i + 1} / {len(pairs)} 句，先标准，再你的{note}")
         self.cmp_playing = True
         self.refresh()
 
     def pair_done(self):
-        """这一句的「标准 → 你的」放完了：连续播放就接着下一句，否则停在这句等你选。"""
+        """This sentence's "reference -> yours" has finished: with continuous play go to the next one, otherwise stop here and wait."""
         self.cmp_playing = False
         n = len(self.pairs() or [])
         i = self.cmp_idx
-        self.set_now(i)   # 停下来时也标出是哪一句
+        self.set_now(i)   # Also mark which sentence it is when stopped
         if self.cmp_auto.get() and i < n - 1:
             self.status.set(f"第 {i + 1} 句对比完，马上放下一句……")
             self.pl_wait = self.root.after(800, lambda: self.play_pair(i + 1))
@@ -532,20 +535,20 @@ class Reader:
         intensive_listening.save_settings(self.settings)
 
     def on_text_double_click(self, event):
-        """检查过发音后，双击文字框里的某一句，就从那一句开始对比。"""
+        """After checking pronunciation, double-click a sentence in the text box to start comparing from it."""
         if not self.pairs():
             return
         pos = len(self.text.get("1.0", f"@{event.x},{event.y}"))
         for i, (a, b) in enumerate(self.speech.spans):
             if a <= pos <= b:
-                self.root.after(10, lambda: self.play_pair(i))   # 等双击选中单词的默认动作做完
+                self.root.after(10, lambda: self.play_pair(i))   # Wait until the default double-click action (selecting a word) is done
                 return
 
-    # ---------- 逐句视图（一句一行） ----------
+    # ---------- Sentence view (one sentence per line) ----------
     LIST_GUIDE = "逐句视图：一句一行，点哪一行就对比哪一句   红色 = 漏读，橙色 = 读错，行尾 = 这句读对的词数"
 
     def show_list(self):
-        """把文字一句一行地显示（只是换个显示方式，原文的分段、换行都不动）。"""
+        """Show the text one sentence per line (only the display changes; the original paragraphs and line breaks are kept)."""
         text = self.get_text()
         r = self.result
         L = self.lines
@@ -554,7 +557,7 @@ class Reader:
         for i, (a, b) in enumerate(tts.split_sentences(text)):
             L.insert("end", f"{i + 1:>2}   ", "num")
             start = L.index("end-1c")
-            L.insert("end", text[a:b].replace("\n", " "))   # 长度不变，下面的字符位置还对得上
+            L.insert("end", text[a:b].replace("\n", " "))   # Same length, so the character positions below still match
             if r:
                 ok = total = 0
                 for s, e, st in r["ref"]:
@@ -575,7 +578,7 @@ class Reader:
         self._mark(self.now_sentence)
 
     def show_editor(self):
-        """「✎ 返回编辑」：回到可以修改的文字框。"""
+        """"✎ 返回编辑": go back to the editable text box."""
         if self.view == "edit":
             return
         self.view = "edit"
@@ -590,9 +593,9 @@ class Reader:
         line = int(self.lines.index(f"@{event.x},{event.y}").split(".")[0])
         if self.pairs() and 1 <= line <= len(self.speech.spans):
             self.play_pair(line - 1)
-        return "break"   # 不要把光标放进只读的逐句视图里
+        return "break"   # Don't put the cursor in the read-only sentence view
 
-    # ---------- 检查发音 ----------
+    # ---------- Check pronunciation ----------
     def check(self):
         if self.job or not self.mine or self.recorder.active:
             return
@@ -630,7 +633,7 @@ class Reader:
             self.heard.insert("end", w, () if st == "ok" else st)
         self.heard.config(state="disabled")
         if self.view == "list":
-            self.show_list()   # 标红 / 标橙、每行的词数跟着更新
+            self.show_list()   # Update the red / orange marks and the word count on each line
 
     def clear_result(self):
         self.result = None
@@ -644,7 +647,7 @@ class Reader:
         if self.view == "list":
             self.show_list()
 
-    # ---------- 播放列表 ----------
+    # ---------- Playlist ----------
     def start_playlist(self, items, msg):
         self.stop()
         self.playlist, self.pl_idx = items, -1
@@ -670,7 +673,7 @@ class Reader:
         self.refresh()
 
     def stop(self):
-        """停掉播放 / 逐句对比；正在合成或检查的话也取消。"""
+        """Stop playback / comparing; also cancel synthesis or checking in progress."""
         if self.job in ("synth", "check"):
             self.cancel_ev.set()
         if self.pl_wait:
@@ -683,14 +686,14 @@ class Reader:
         self.refresh()
 
     def set_now(self, i):
-        """高亮正在读的第 i 句（None = 不高亮）。"""
+        """Highlight sentence i being read (None = no highlight)."""
         if i == self.now_sentence:
             return
         self.now_sentence = i
         self._mark(i)
 
     def _mark(self, i):
-        """在当前显示的那个视图里标出第 i 句（逐句视图里标整行）。"""
+        """Mark sentence i in whichever view is shown (in the sentence view, the whole line)."""
         self.text.tag_remove("now", "1.0", "end")
         self.lines.tag_remove("now", "1.0", "end")
         if i is None or not self.speech or i >= len(self.speech.spans):
@@ -703,7 +706,7 @@ class Reader:
             self.text.tag_add("now", f"1.0+{a}c", f"1.0+{b}c")
             self.text.see(f"1.0+{a}c")
 
-    # ---------- 后台任务 ----------
+    # ---------- Background jobs ----------
     def start_job(self, kind, fn, *args):
         self.job = kind
         self.cancel_ev = threading.Event()
@@ -721,11 +724,11 @@ class Reader:
                     continue
                 self.job = None
                 self.bar["value"] = 0
-                # 逐句对比在等这一步：成功了就接着做下一步，否则作罢
+                # Comparing is waiting for this step: if it worked, go on to the next step, otherwise give up
                 pending, self.cmp_pending = self.cmp_pending, False
                 if kind == "synth_done":
                     text, sp = msg
-                    if text == self.get_text():   # 合成途中文字没被改过
+                    if text == self.get_text():   # The text wasn't edited during synthesis
                         self.speech = sp
                         how = "（离线）" if sp.engine == "kokoro" else ""
                         if pending:
@@ -747,7 +750,7 @@ class Reader:
                     if path == self.mine and text == self.get_text():
                         self.show_result(r)
                         self.status.set("检查完了：可以「↔ 逐句对比」，一句一句听差别")
-                        if pending:   # 是点「逐句对比」触发的检查：接着开始对比
+                        if pending:   # This check was started by "逐句对比": start comparing next
                             self.root.after(10, self.compare_play)
                 elif kind == "job_error":
                     self.status.set("出错了")
@@ -761,12 +764,12 @@ class Reader:
         self.root.after(80, self.poll)
 
     def download_offline_now(self):
-        """朗读失败后用户已经同意下载，不再重复问。"""
+        """The user already agreed to the download after reading failed; don't ask again."""
         if not self.job and not tts.offline_ready():
             self.start_job("download", self._download_worker)
 
     def tick(self):
-        """播放进度、正在读的句子、逐句对比换下一段、录音计时。"""
+        """Playback progress, the sentence being read, moving to the next part while comparing, recording timer."""
         p = self.player
         if p.error:
             self.status.set(f"播放出错：{p.error}")
@@ -779,7 +782,7 @@ class Reader:
                 self.set_now(sent if sent is not None else self._sentence_at(pos))
             else:
                 self.set_now(sent)
-            done = not p.playing or (end is not None and pos >= end)   # 放完了，或到了这句的结尾
+            done = not p.playing or (end is not None and pos >= end)   # Finished playing, or reached the end of this sentence
             if done:
                 p.stop()
                 gap = 400 if self.pl_idx + 1 < len(self.playlist) else 0
@@ -787,7 +790,7 @@ class Reader:
             if self.job is None:
                 self.bar["value"] = 100 * pos / p.duration if p.duration else 0
             if self.cmp_playing:
-                self.update_cmp_info()   # 「正在放：标准 / 你的」
+                self.update_cmp_info()   # "正在放：标准 / 你的" (now playing: reference / yours)
         fmt = transcriber.App.fmt_time
         if self.speech and self.player.path == self.speech.path and self.playlist:
             self.std_time.set(f"{fmt(p.position)} / {fmt(p.duration)}")
@@ -865,7 +868,7 @@ class Reader:
         self.cmp_info.config(text=text, style="TLabel")
 
     def shutdown(self):
-        """离开页面 / 关程序：停播放；录了一半的也存下来。"""
+        """Leaving the tab / closing the program: stop playback; a half-finished recording is saved too."""
         self.stop()
         if self.recorder.active:
             self.finish_record()

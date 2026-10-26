@@ -1,11 +1,11 @@
-"""程序存东西的位置：设置文件、录音文件夹。
+"""Where the program keeps its files: the settings file and the recordings folder.
 
-直接跑 python app.py：都放在程序文件夹里（settings.json、recordings/）。
-打包成 .app / .exe 后程序目录不能写，改放到用户目录：
-  设置  Mac: ~/Library/Application Support/ListenStudio/settings.json
-        Windows: %APPDATA%\\ListenStudio\\settings.json
-  录音  ~/Music/ListenStudio/
-以前的 jingting_settings.json 会在第一次启动时自动搬过来。
+Running `python app.py` directly: everything goes in the program folder (settings.json, recordings/).
+In the packaged .app / .exe the program folder is read-only, so files go in the user folder:
+  Settings    Mac: ~/Library/Application Support/ListenStudio/settings.json
+              Windows: %APPDATA%\\ListenStudio\\settings.json
+  Recordings  ~/Music/ListenStudio/
+An old jingting_settings.json is moved here automatically on first start.
 """
 import os
 import shutil
@@ -31,18 +31,18 @@ def data_dir():
 SETTINGS_FILE = os.path.join(data_dir(), "settings.json")
 RECORDINGS_DIR = (os.path.join(os.path.expanduser("~/Music"), APP_NAME) if FROZEN
                   else os.path.join(HERE, "recordings"))
-READER_DRAFT = os.path.join(data_dir(), "reader_draft.txt")   # 「朗读」页正在写的文字
+READER_DRAFT = os.path.join(data_dir(), "reader_draft.txt")   # The text being written on the 朗读 (Read aloud) tab
 
-# 下载的离线模型（不管是不是打包版，都放用户目录，不放进程序文件夹 / git）
+# Downloaded offline models (always in the user folder, packaged or not; never in the program folder / git)
 MODELS_DIR = os.path.join(_user_dir(APP_NAME), "models")
-# 可以随时删掉重建的缓存（朗读生成的音频）
+# Cache that can be deleted at any time and rebuilt (audio generated for reading aloud)
 if sys.platform == "darwin":
     CACHE_DIR = os.path.expanduser(f"~/Library/Caches/{APP_NAME}")
 else:
     CACHE_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.cache"),
                              APP_NAME, "cache")
 
-# 改名前的设置文件（脚本旁边的、以前打包版用户目录里的）
+# Settings files from before the rename (next to the script, or in the old packaged app's user folder)
 LEGACY_SETTINGS = [
     os.path.join(HERE, "jingting_settings.json"),
     os.path.join(_user_dir("jingting"), "jingting_settings.json"),
@@ -50,7 +50,7 @@ LEGACY_SETTINGS = [
 
 
 def migrate_settings():
-    """还没有 settings.json、但有旧的 jingting_settings.json 时，把旧文件搬过来。"""
+    """If there is no settings.json yet but an old jingting_settings.json exists, move the old file here."""
     if os.path.exists(SETTINGS_FILE):
         return
     for old in LEGACY_SETTINGS:
@@ -58,5 +58,5 @@ def migrate_settings():
             try:
                 shutil.move(old, SETTINGS_FILE)
             except OSError:
-                pass  # 搬不动就算了，用默认设置
+                pass  # If it can't be moved, never mind: use the default settings
             return

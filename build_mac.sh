@@ -1,17 +1,18 @@
 #!/bin/bash
-# 在 Mac 上把 app.py（听写 & 精听：转录 / 录音 + 精听）打包成 ListenStudio.app
-# （打包只能在 Mac 上做，Windows 上做不了）。
+# Package app.py (ListenStudio: transcribe / record + intensive listening + read aloud)
+# into ListenStudio.app on a Mac (packaging only works on a Mac, not on Windows).
 #
-# 前提：装好 python.org 的 Python 3（自带 Tk）；用 Homebrew 的 Python 需要另装 python-tk。
-# 用法：bash build_mac.sh
-# 产物：dist/ListenStudio.app 和 dist/ListenStudio-mac-<芯片>.zip
+# Needs: Python 3 from python.org (it includes Tk); with Homebrew's Python, also install python-tk.
+# Usage: bash build_mac.sh
+# Output: dist/ListenStudio.app and dist/ListenStudio-mac-<chip>.zip
 #
-# 注意：Whisper（torch 有 1GB+）和 ffmpeg 命令行工具不打进 .app。
-#   两页的读取、播放、波形、另存音频（wav/mp3/m4a/flac）都用打进去的 PyAV（av），不需要它们；
-#   录音只用 sounddevice；
-#   精听字幕和转录页的「开始转录」会去找电脑上装了 Whisper 的 Python 来识别
-#   （pip3 install openai-whisper；也可以用环境变量 JINGTING_PYTHON 指定，见 intensive_listening.py）。
-#   音频由 .app 用 PyAV 解码好再交给那个 Python，所以它也不需要 ffmpeg。
+# Note: Whisper (torch is 1GB+) and the ffmpeg command-line tools are NOT put in the .app.
+#   Reading, playback, waveforms and saving audio (wav/mp3/m4a/flac) all use the bundled
+#   PyAV (av), so they don't need them; recording only uses sounddevice.
+#   Subtitles and the transcribe tab's "开始转录" look for a Python on the computer that
+#   has Whisper (pip3 install openai-whisper; or set it with the JINGTING_PYTHON
+#   environment variable, see intensive_listening.py).
+#   The .app decodes the audio with PyAV before handing it over, so that Python doesn't need ffmpeg either.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -23,8 +24,9 @@ pip install -q -r requirements.txt pyinstaller
 python -c "import tkinter; tkinter.Tk().destroy()" || {
     echo "这个 Python 没有可用的 Tk，请装 python.org 的 Python，或 brew install python-tk"; exit 1; }
 
-# --collect-all：把拖放库 tkdnd、PortAudio、ffmpeg 动态库、朗读用的 espeak-ng / onnxruntime
-# 这些二进制一起打进去；certifi 的证书让 Edge 在线语音的 HTTPS 连接在 .app 里也能用
+# --collect-all: bundle binaries such as the tkdnd drag-and-drop library, PortAudio, the ffmpeg
+# libraries, and espeak-ng / onnxruntime for reading aloud; certifi's certificates make the
+# HTTPS connection for Edge online voices work inside the .app
 pyinstaller --noconfirm --clean --windowed \
     --name ListenStudio \
     --osx-bundle-identifier local.listenstudio \
@@ -37,16 +39,17 @@ pyinstaller --noconfirm --clean --windowed \
     --collect-data certifi \
     app.py
 
-# 录音要用麦克风：macOS 要求 Info.plist 里写明用途，否则会直接拒绝访问
+# Recording uses the mic: macOS requires the reason in Info.plist, or it simply denies access
 PLIST=dist/ListenStudio.app/Contents/Info.plist
 plutil -replace NSMicrophoneUsageDescription \
     -string "录音功能需要使用麦克风（录音转录、精听，以及朗读页录下自己的朗读来对比发音）。" "$PLIST"
-# 关掉 App Nap：窗口不在前台时 macOS 会把程序"打盹"（定时器变慢、被挂起），
-# 精听的自动下一句倒计时、播放进度这些都靠定时器，打盹后回来会卡一下或不动
+# Turn off App Nap: when the window isn't in front, macOS puts the program to "nap" (timers
+# slow down or are suspended). The auto-next countdown and playback progress rely on timers,
+# so after a nap the program would stutter or not respond
 plutil -replace NSAppSleepDisabled -bool YES "$PLIST"
-codesign --force --deep --sign - dist/ListenStudio.app   # 改过 Info.plist 要重新签名（本机自签）
+codesign --force --deep --sign - dist/ListenStudio.app   # Info.plist changed, so sign again (local ad-hoc signature)
 
-ARCH="$(uname -m)"   # arm64 = M 系列芯片，x86_64 = Intel
-# 用 ditto 压缩，保留 .app 里的符号链接和权限（用 zip 会弄坏）
+ARCH="$(uname -m)"   # arm64 = M-series chip, x86_64 = Intel
+# Zip with ditto, which keeps the symlinks and permissions inside the .app (plain zip breaks them)
 ditto -c -k --keepParent dist/ListenStudio.app "dist/ListenStudio-mac-$ARCH.zip"
 echo "完成：dist/ListenStudio.app  和  dist/ListenStudio-mac-$ARCH.zip"

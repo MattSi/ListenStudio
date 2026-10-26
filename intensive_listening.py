@@ -1,27 +1,29 @@
 """
-精听页（app.py 的「精听」标签）：自动按静音断句，每句播完自动暂停。
-这个文件只是模块，程序从 app.py 启动：python app.py
+The intensive listening tab (the "精听" tab in app.py): splits audio into sentences at the
+silences and pauses after each sentence.
+This file is a module only; start the program from app.py: python app.py
 
-把音频或视频文件拖进窗口（或点拖放区选择文件）即可开始。
-窗口里会显示当前句的放大波形和整段总览，点总览可以跳到那一句。
-视频文件会同时显示画面，每句的画面和声音同步播放、同步暂停。
+Drop an audio or video file into the window (or click the drop zone to choose a file) to start.
+The window shows a zoomed waveform of the current sentence and an overview of the whole file;
+click the overview to jump to that sentence.
+For video files the picture is shown too; picture and sound play and pause together for each sentence.
 
-按键：
-  空格        播放下一句（播放中按空格 = 停止）
-  R / ↓       重听当前句
-  ← / →       上一句 / 下一句
-  T           显示 / 隐藏字幕
-  + / -       音量大 / 小（超过 100% 自动限幅，不爆音）
-  [ / ]       放慢 / 加快（0.5× ~ 1.5×，变速不变调）
+Keys:
+  Space       play the next sentence (Space while playing = stop)
+  R / Down    replay the current sentence
+  Left/Right  previous / next sentence
+  T           show / hide subtitles
+  + / -       volume up / down (above 100% a limiter stops clipping)
+  [ / ]       slower / faster (0.5x - 1.5x, speed changes without changing pitch)
 
-依赖：pip install av numpy sounddevice pillow tkinterdnd2
-  字幕是可选功能（在"⚙ 设置"里打开），另需：pip install faster-whisper
-  （也可以用 openai-whisper；有 NVIDIA 显卡、装了带 CUDA 的 torch 时自动用 GPU；
-   识别结果有缓存，每个文件只识别一次）
+Dependencies: pip install av numpy sounddevice pillow tkinterdnd2
+  Subtitles are optional (turn them on in "⚙ 设置"); they also need: pip install faster-whisper
+  (openai-whisper also works; with an NVIDIA GPU and torch with CUDA it uses the GPU;
+   results are cached, so each file is only recognized once)
 
-断句参数点右上角"⚙ 设置"修改，改完立即重新断句，
-并保存到 settings.json（位置见 app_paths.py），下次打开自动沿用。
-命令行参数（--threshold / --min-silence / --max-len / --pad）见 app.py。
+Sentence-split options are changed with "⚙ 设置" (top right); changes re-split right away
+and are saved to settings.json (location: see app_paths.py), so they are kept next time.
+Command-line options (--threshold / --min-silence / --max-len / --pad): see app.py.
 """
 
 import bisect
@@ -51,7 +53,7 @@ from PIL import ImageTk
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
-except ImportError:  # 没装 tkinterdnd2 时退回到只能点按钮选文件
+except ImportError:  # Without tkinterdnd2, fall back to choosing files with the button only
     TkinterDnD = None
 
 AUDIO_EXTS = (".m4a", ".mp3", ".wav", ".flac", ".aac", ".ogg", ".opus", ".wma",
@@ -61,47 +63,47 @@ DROP_HINT = ("把音频或视频文件拖到这里（或点这里选择），自
              else "点击这里选择音频或视频文件")
 UI_FONT = ui_style.FONT
 
-# ---------- 设置（settings.json，位置见 app_paths.py） ----------
+# ---------- Settings (settings.json, location: see app_paths.py) ----------
 SETTINGS_FILE = app_paths.SETTINGS_FILE
 DEFAULTS = {
-    "threshold": None,    # 静音阈值 dB（相对峰值）；None = 按本底噪声自动定
-    "min_silence": 0.35,  # 多长的静音算断句（秒）
-    "max_len": 6.0,       # 超过这么长（秒）的句子再切；0 = 不再切
-    "pad": 0.15,          # 每句前后多留的时间（秒）
-    "volume": 2.0,        # 音量倍数；超过 1 时自动限幅，不会爆音
-    "speed": 1.0,         # 播放速度（变速不变调）
-    "subtitles": "off",   # 字幕：off 关闭 / always 一直显示 / after 听完再显示
+    "threshold": None,    # Silence threshold in dB (relative to the peak); None = set automatically from the noise floor
+    "min_silence": 0.35,  # How long a silence ends a sentence (seconds)
+    "max_len": 6.0,       # Sentences longer than this (seconds) are split again; 0 = don't
+    "pad": 0.15,          # Extra time kept before and after each sentence (seconds)
+    "volume": 2.0,        # Volume multiplier; above 1 a limiter stops clipping
+    "speed": 1.0,         # Playback speed (changes speed without changing pitch)
+    "subtitles": "off",   # Subtitles: off / always (always shown) / after (shown after the sentence has played)
     "whisper_model": "small.en",
-    "mic": None,          # 麦克风 / 扬声器的名字；None = 跟随系统默认
+    "mic": None,          # Mic / speaker names; None = follow the system default
     "speaker": None,
-    "auto_next": False,   # 一句播完后自动播放下一句
-    "auto_delay": 3.0,    # 自动播放下一句前等几秒
-    "rec_length": "60",   # 转录页录音时长："60" / "90" 秒，或 "custom" = 自定
-    "rec_custom_min": 5.0,  # 「自定」的分钟数
-    "tts_voice": "en-CA-ClaraNeural",  # 「朗读」页：语音（见 tts.VOICES）
-    "tts_speed": 1.0,     # 语速倍数
-    "tts_pause": 0.6,     # 句子之间停几秒
-    "tts_engine": "auto",  # auto 在线优先 / edge 只用在线 / offline 只用离线
-    "cmp_auto": True,     # 「朗读」页逐句对比：一句对比完自动接着下一句
+    "auto_next": False,   # Play the next sentence automatically after one finishes
+    "auto_delay": 3.0,    # Seconds to wait before playing the next sentence automatically
+    "rec_length": "60",   # Recording length on the transcribe tab: "60" / "90" seconds, or "custom"
+    "rec_custom_min": 5.0,  # Minutes for "自定" (custom)
+    "tts_voice": "en-CA-ClaraNeural",  # 朗读 (Read aloud) tab: voice (see tts.VOICES)
+    "tts_speed": 1.0,     # Speech rate multiplier
+    "tts_pause": 0.6,     # Pause between sentences (seconds)
+    "tts_engine": "auto",  # auto = online first / edge = online only / offline = offline only
+    "cmp_auto": True,     # 朗读 tab, compare by sentence: go on to the next sentence automatically
 }
 AUTO_DELAY_RANGE = (0.0, 30.0)
 SYSTEM_DEVICE = "跟随系统默认"
 SUB_MODES = {"off": "关闭", "always": "一直显示", "after": "听完一句再显示",
-             "manual": "手动显示"}  # manual：每句都先藏着，点按钮 / 按 T 才显示
-# 识别模型：转录页和精听字幕共用一个（settings.json 里的 whisper_model），
-# 加载好的模型也共用 _whisper_models，同一个模型只加载一次
+             "manual": "手动显示"}  # manual: every sentence starts hidden; shown only with the button / T
+# Recognition model: the transcribe tab and the subtitles share one (whisper_model in settings.json),
+# and also share the loaded models in _whisper_models, so each model is loaded only once
 WHISPER_MODELS = ["tiny.en", "base.en", "small.en", "medium.en", "turbo", "large-v3"]
-MODEL_LOCK = threading.Lock()  # 同一时间只让一边用模型（openai-whisper 不能两个线程同时用）
+MODEL_LOCK = threading.Lock()  # Only one side may use a model at a time (openai-whisper can't be used by two threads at once)
 
 
 def load_settings():
-    app_paths.migrate_settings()  # 旧的 jingting_settings.json 第一次会自动改名搬过来
+    app_paths.migrate_settings()  # An old jingting_settings.json is renamed and moved here the first time
     s = dict(DEFAULTS)
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             s.update({k: v for k, v in json.load(f).items() if k in DEFAULTS})
     except (OSError, ValueError):
-        pass  # 没有文件或文件坏了就用默认值
+        pass  # No file, or a broken file: use the defaults
     return s
 
 
@@ -114,16 +116,16 @@ def save_settings(s):
 
 
 def audio_devices(kind):
-    """kind = "input" / "output"，返回 {名字: 设备号}。
-    Windows 上同一个设备在 MME / DirectSound / WASAPI 下各出现一次，只留默认的那套；
-    MME 的名字最多 31 个字，从别的那套里借完整名字。"""
+    """kind = "input" / "output"; returns {name: device index}.
+    On Windows the same device appears once each under MME / DirectSound / WASAPI; keep only the default API's set.
+    MME names are cut at 31 characters, so borrow the full name from another API."""
     key = f"max_{kind}_channels"
     api = sd.default.hostapi
     devs = [d for d in sd.query_devices() if d[key] > 0]
     full = [d["name"] for d in devs if d["hostapi"] != api]
     out = {}
     for d in devs:
-        if d["hostapi"] != api or "Sound Mapper" in d["name"]:  # Mapper 就是系统默认
+        if d["hostapi"] != api or "Sound Mapper" in d["name"]:  # The Mapper is the system default
             continue
         name = next((f for f in full if f.startswith(d["name"])), d["name"])
         out.setdefault(name, d["index"])
@@ -131,18 +133,18 @@ def audio_devices(kind):
 
 
 def apply_audio_devices(opts):
-    """把设置里选的麦克风 / 扬声器设成 sounddevice 的默认设备，录音和两页的播放都会用它。
-    选的设备拔掉了就退回系统默认。"""
+    """Make the mic / speaker chosen in settings sounddevice's default devices; recording and playback on both tabs use them.
+    If the chosen device is unplugged, fall back to the system default."""
     try:
         ins, outs = audio_devices("input"), audio_devices("output")
-    except Exception:  # 没有声卡之类，就全用系统默认
+    except Exception:  # No sound card or similar: use the system defaults for everything
         ins, outs = {}, {}
     sd.default.device = (ins.get(opts["mic"]), outs.get(opts["speaker"]))
 
 
-# ---------- 读取音频 ----------
+# ---------- Reading audio ----------
 def load_audio(path, layout="stereo", rate=None):
-    """解码成 float32 数组 (采样数, 声道数)；rate 不填就用原采样率。"""
+    """Decode into a float32 array (samples, channels); without rate, keep the original sample rate."""
     container = av.open(path)
     stream = container.streams.audio[0]
     sr = rate or stream.rate
@@ -166,18 +168,18 @@ def load_audio(path, layout="stereo", rate=None):
     return audio, sr
 
 
-# ---------- 静音检测切句 ----------
+# ---------- Splitting sentences at silences ----------
 def noise_threshold(db, ratio=0.5):
-    """按本底噪声定阈值：取底噪（最安静 5% 的帧）和语音（最响 10% 的帧）之间的位置。
-    ratio=0.5 即两者正中间；呼吸声、底噪一般低于这里，正常说话高于这里。"""
+    """Set the threshold from the noise floor: a point between the noise (quietest 5% of frames) and the speech (loudest 10%).
+    ratio=0.5 is exactly in the middle; breathing and background noise are usually below it, normal speech above it."""
     noise = np.percentile(db, 5)
     speech = np.percentile(db, 90)
     return noise + ratio * (speech - noise)
 
 
 def split_long(db, thr, s, e, max_f, min_piece):
-    """超长句在句内最长的停顿处切开，递归直到每段都不超过 max_f 帧。
-    停顿 = 连续低于静音阈值的帧；一样长时选更靠近句子中间的。"""
+    """Split an overly long sentence at its longest internal pause, recursively, until no part is longer than max_f frames.
+    Pause = consecutive frames below the silence threshold; if two are equally long, pick the one nearer the middle."""
     if e - s <= max_f:
         return [(s, e)]
     lo, hi = s + min_piece, e - min_piece
@@ -187,7 +189,7 @@ def split_long(db, thr, s, e, max_f, min_piece):
     edges = np.flatnonzero(np.diff(quiet.astype(np.int8)))
     mid = (s + e) / 2
     best = None
-    for a, b in zip(edges[::2] + s, edges[1::2] + s):  # 每段停顿 [a, b)
+    for a, b in zip(edges[::2] + s, edges[1::2] + s):  # Each pause is [a, b)
         c = (a + b) // 2
         if lo <= c <= hi:
             key = (b - a, -abs(c - mid))
@@ -195,7 +197,7 @@ def split_long(db, thr, s, e, max_f, min_piece):
                 best = (key, c)
     if best is not None:
         cut = int(best[1])
-    else:  # 句内完全没有停顿：退而求其次，切在 0.2 秒内最安静的地方
+    else:  # No pause at all inside the sentence: second best, cut at the quietest 0.2 s
         sm = np.convolve(db[s:e], np.ones(20) / 20, mode="same")
         cut = lo + int(np.argmin(sm[lo - s:hi - s]))
     return (split_long(db, thr, s, cut, max_f, min_piece)
@@ -204,10 +206,10 @@ def split_long(db, thr, s, e, max_f, min_piece):
 
 def split_sentences(audio, sr, threshold_db=None, min_silence=0.35,
                     min_len=0.4, pad=0.15, max_len=6.0):
-    """返回 (句子列表[(起, 止) 采样点], 实际使用的阈值 dB)。
-    threshold_db=None 时按本底噪声自动定阈值；max_len>0 时超长句再切。"""
+    """Return (list of sentences [(start, end) in samples], the threshold actually used in dB).
+    threshold_db=None sets the threshold from the noise floor; max_len>0 splits overly long sentences again."""
     mono = audio.mean(axis=1)
-    hop = int(sr * 0.01)  # 10ms 一帧
+    hop = int(sr * 0.01)  # 10 ms per frame
     n = len(mono) // hop
     frames = mono[: n * hop].reshape(n, hop)
     rms = np.sqrt((frames ** 2).mean(axis=1)) + 1e-10
@@ -242,14 +244,14 @@ def split_sentences(audio, sr, threshold_db=None, min_silence=0.35,
         if (e - s) * 0.01 < min_len:
             continue
         s, e = max(0, s - pad_f), min(n, e + pad_f + 1)
-        pieces = (split_long(db, threshold_db, s, e, int(max_len / 0.01), 150)  # 每段至少 1.5 秒
+        pieces = (split_long(db, threshold_db, s, e, int(max_len / 0.01), 150)  # Each part at least 1.5 s
                   if max_len > 0 else [(s, e)])
         result += [(a * hop, min(len(mono), b * hop)) for a, b in pieces]
     return result, threshold_db
 
 
-# ---------- 音量 ----------
-# ---------- 播放速度 ----------
+# ---------- Volume ----------
+# ---------- Playback speed ----------
 SPEEDS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5]
 
 
@@ -258,13 +260,13 @@ def speed_label(v):
 
 
 def stretch(x, sr, rate):
-    """变速不变调：用 ffmpeg 的 atempo 滤镜（PyAV 自带），放慢时声音不会变低沉。
-    x 是 (采样数, 2) 的 float32；返回新的数组，长度约为 len(x) / rate。"""
+    """Change speed without changing pitch: uses ffmpeg's atempo filter (built into PyAV), so slowing down doesn't make the voice deeper.
+    x is float32 of shape (samples, 2); returns a new array about len(x) / rate long."""
     if abs(rate - 1.0) < 1e-6:
         return x
     g = av.filter.Graph()
     src = g.add_abuffer(format="flt", sample_rate=sr, layout="stereo")
-    tempo = g.add("atempo", f"{rate}")  # 单个 atempo 支持 0.5 ~ 2.0
+    tempo = g.add("atempo", f"{rate}")  # One atempo filter supports 0.5 - 2.0
     sink = g.add("abuffersink")
     src.link_to(tempo)
     tempo.link_to(sink)
@@ -273,7 +275,7 @@ def stretch(x, sr, rate):
                                        format="flt", layout="stereo")
     frame.sample_rate, frame.pts = sr, 0
     g.push(frame)
-    g.push(None)  # 结束，把滤镜里剩下的也吐出来
+    g.push(None)  # End of input: flush what is left in the filter
     out = []
     while True:
         try:
@@ -284,9 +286,9 @@ def stretch(x, sr, rate):
 
 
 def boost(x, sr, gain, ceiling=0.95):
-    """放大 gain 倍，并用限幅器压住峰值：响的地方自动收一点，不会爆音。
-    做法：每 5ms 一块算出"不超过 ceiling 需要的增益"，向前后各看 20ms 取最小值
-    （提前收、慢慢放），再平滑后逐个采样乘上去。"""
+    """Amplify by gain and hold the peaks down with a limiter: loud parts are turned down a little, so it never clips.
+    How: for each 5 ms block, compute "the gain that stays under ceiling", take the minimum over 20 ms
+    before and after (turn down early, release slowly), smooth it, then multiply sample by sample."""
     if gain <= 1.0:
         return x * gain
     y = x * gain
@@ -294,10 +296,10 @@ def boost(x, sr, gain, ceiling=0.95):
     n = -(-len(y) // blk)
     peak = np.abs(np.pad(y, ((0, n * blk - len(y)), (0, 0)))).reshape(n, -1).max(axis=1)
     g = np.minimum(1.0, ceiling / np.maximum(peak, 1e-9))
-    r = 4  # ±4 块 = ±20ms 取最小
+    r = 4  # Minimum over +-4 blocks = +-20 ms
     gp = np.pad(g, r, mode="edge")
     g = np.min([gp[i:i + n] for i in range(2 * r + 1)], axis=0)
-    g = np.convolve(np.pad(g, 2, mode="edge"), np.ones(5) / 5, mode="valid")  # ±10ms 平滑
+    g = np.convolve(np.pad(g, 2, mode="edge"), np.ones(5) / 5, mode="valid")  # Smooth over +-10 ms
     g = np.interp(np.arange(len(y)), np.arange(n) * blk + blk / 2, g)
     return np.clip(y * g[:, None], -ceiling, ceiling).astype(np.float32)
 
@@ -306,12 +308,12 @@ def fmt(sec):
     return f"{int(sec // 60):02d}:{sec % 60:04.1f}"
 
 
-# ---------- 波形 ----------
-ENV_SEC = 0.001  # 包络精度：每 1ms 取一个峰值
+# ---------- Waveform ----------
+ENV_SEC = 0.001  # Envelope resolution: one peak per 1 ms
 
 
 def make_envelope(audio, sr):
-    """把音频压成每 ENV_SEC 一个峰值（0~1），画波形时只用这个，不碰原始数据。"""
+    """Reduce the audio to one peak (0-1) per ENV_SEC; waveforms are drawn from this only, never from the raw data."""
     hop = max(1, int(sr * ENV_SEC))
     peak = np.abs(audio).max(axis=1)
     n = len(peak) // hop
@@ -320,35 +322,35 @@ def make_envelope(audio, sr):
 
 
 def column_peaks(env, a, b, width):
-    """env[a:b] 均分成 width 列，每列取最大值。"""
+    """Split env[a:b] into width equal columns and take the maximum of each."""
     b = max(b, a + 1)
     idx = np.linspace(a, b, width + 1).astype(int)[:-1]
     return np.maximum.reduceat(env[:b], idx)
 
 
-# ---------- 字幕（可选，需要 pip install faster-whisper 或 openai-whisper） ----------
+# ---------- Subtitles (optional; need pip install faster-whisper or openai-whisper) ----------
 CACHE_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/.cache"),
                          "jingting", "subs")
 _whisper_models = {}
 
-# 优先用 faster-whisper（CTranslate2）：CPU 上比 openai-whisper 快（算词时间戳快 2~3 倍），
-# 也不用装 1GB+ 的 torch。有 NVIDIA 显卡、又装了带 CUDA 的 torch 时还是让 openai-whisper 用 GPU。
-# 这段代码本进程用，也拼在交给外部 Python 跑的脚本前面（所以只能用标准库）。
+# Prefer faster-whisper (CTranslate2): faster than openai-whisper on CPU (2-3x faster word timestamps),
+# and no need to install 1GB+ of torch. With an NVIDIA GPU and torch with CUDA, openai-whisper still uses the GPU.
+# This code runs in this process and is also put in front of the script given to an external Python (so standard library only).
 FW_LOADER = r'''
 import os, platform, sys
-os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")  # Windows 没开开发者模式时的提示
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")  # hide the warning shown on Windows without Developer Mode
 
 def load_fw(name):
-    """faster-whisper 模型；没装、或者应该交给 openai-whisper 用 GPU 时抛 ImportError。"""
+    """A faster-whisper model; raises ImportError if it isn't installed, or if openai-whisper should use the GPU instead."""
     try:
         import torch
         gpu = torch.cuda.is_available()
-    except Exception:  # 没装 torch，或者 torch 坏了（ARM 机器上常见）
+    except Exception:  # no torch, or a broken torch (common on ARM machines)
         gpu = False
     if gpu:
         raise ImportError("用 openai-whisper + GPU")
     from faster_whisper import WhisperModel
-    # Windows ARM 上的 CTranslate2 是 x64 模拟运行的，int8 反而比 float32 慢
+    # On Windows ARM, CTranslate2 runs under x64 emulation, where int8 is actually slower than float32
     arm_win = sys.platform == "win32" and platform.machine() == "ARM64"
     return WhisperModel(name, device="cpu", compute_type="float32" if arm_win else "int8")
 '''
@@ -356,26 +358,26 @@ exec(FW_LOADER)
 
 
 def subs_cache_path(path, model_name):
-    """识别结果按 文件路径+大小+修改时间+模型 缓存，同一个文件只识别一次。"""
+    """Results are cached by file path + size + modified time + model, so each file is only recognized once."""
     st = os.stat(path)
     key = f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime_ns}|{model_name}"
     return os.path.join(CACHE_DIR, hashlib.sha1(key.encode()).hexdigest() + ".json")
 
 
 def transcribe_words(path, model_name):
-    """返回 [(开始秒, 结束秒, 词), ...]。第一次用某个模型会比较慢（加载模型）。"""
+    """Return [(start s, end s, word), ...]. The first use of a model is slow (it has to load)."""
     cache = subs_cache_path(path, model_name)
     try:
         with open(cache, encoding="utf-8") as f:
             return [tuple(w) for w in json.load(f)]
     except (OSError, ValueError):
         pass
-    audio16k = load_audio(path, layout="mono", rate=16000)[0][:, 0]  # Whisper 要 16kHz 单声道
+    audio16k = load_audio(path, layout="mono", rate=16000)[0][:, 0]  # Whisper wants 16 kHz mono
     try:
         words = _transcribe_here(audio16k, model_name)
     except ImportError:
-        # 打包好的 .app / .exe 里没有 Whisper（带上 torch 会大 1GB+），
-        # 就去找电脑上装了 Whisper 的 Python，让它来识别
+        # The packaged .app / .exe has no Whisper (torch would add 1GB+),
+        # so find a Python on the computer that has Whisper and let it do the recognition
         words = _transcribe_external(audio16k, model_name)
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -387,8 +389,8 @@ def transcribe_words(path, model_name):
 
 
 def _transcribe_here(audio16k, model_name):
-    """在本进程里用 Whisper 识别（直接跑脚本、环境里装了 Whisper 时）。
-    转录页正在用模型时，在这里排队等它用完。"""
+    """Recognize with Whisper in this process (when running the script with Whisper installed).
+    If the transcribe tab is using the model, wait here until it's done."""
     with MODEL_LOCK:
         return _transcribe_here_locked(audio16k, model_name)
 
@@ -403,11 +405,11 @@ def _transcribe_here_locked(audio16k, model_name):
                                                   word_timestamps=True, beam_size=1)
         return [(w.start, w.end, w.word) for s in segs for w in s.words or []]
     except ImportError:
-        pass  # 没有 faster-whisper，用 openai-whisper
+        pass  # No faster-whisper: use openai-whisper
     import torch
     import whisper
-    # Windows 上没有 Triton，Whisper 算词时间戳时会退回普通实现并刷警告；
-    # 只影响对齐那一小步（识别本身仍在 GPU 上），结果一样，屏蔽掉免得吓人
+    # There is no Triton on Windows, so Whisper falls back to a plain implementation for word timestamps and prints warnings;
+    # it only affects that small alignment step (recognition itself still runs on the GPU) and the result is the same, so hide them
     warnings.filterwarnings("ignore", message="Failed to launch Triton kernels")
     if model_name not in _whisper_models:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -419,7 +421,7 @@ def _transcribe_here_locked(audio16k, model_name):
             for seg in result["segments"] for w in seg.get("words", [])]
 
 
-# 交给外部 Python 跑的识别脚本：读 .npy 音频 → Whisper → 把词写成 JSON
+# Recognition script run by an external Python: read .npy audio -> Whisper -> write the words as JSON
 WHISPER_HELPER = FW_LOADER + r"""
 import json, warnings
 warnings.filterwarnings("ignore")
@@ -439,27 +441,27 @@ except ImportError:
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(words, f, ensure_ascii=False)
 """
-# 外部 Python 能用的条件：有 numpy，faster-whisper / openai-whisper 有一个就行
+# An external Python is usable if it has numpy and either faster-whisper or openai-whisper
 HAS_WHISPER = ("import numpy, importlib.util as u; "
                "assert u.find_spec('faster_whisper') or u.find_spec('whisper')")
 INSTALL_HINT = "pip3 install faster-whisper" if sys.platform == "darwin" else "pip install faster-whisper"
-NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # Windows 上不弹黑色命令行窗口
-_external_python = []  # 找到的 Python 路径（找过一次就记住）
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # On Windows, don't pop up a black console window
+_external_python = []  # Path of the Python we found (remembered after the first search)
 
 
 def find_external_python():
-    """找一个装了 Whisper 的 Python。从 Finder 打开 .app 时 PATH 很短，所以把常见位置都试一遍。
-    也可以用环境变量 JINGTING_PYTHON 直接指定。"""
+    """Find a Python that has Whisper. When the .app is opened from Finder, PATH is very short, so try all the usual places.
+    It can also be set directly with the JINGTING_PYTHON environment variable."""
     if _external_python:
         return _external_python[0]
     cands = [os.environ.get("JINGTING_PYTHON")]
     cands += sorted(glob.glob("/Library/Frameworks/Python.framework/Versions/*/bin/python3"),
-                    reverse=True)  # python.org 装的 Python（新版本优先）
+                    reverse=True)  # Python installed from python.org (newest version first)
     cands += ["/opt/homebrew/bin/python3", "/usr/local/bin/python3",
               shutil.which("python3"), shutil.which("python")]
     seen = set()
     for py in cands:
-        # /usr/bin/python3 在没装开发工具的 Mac 上会弹"安装命令行工具"，跳过
+        # On a Mac without developer tools, /usr/bin/python3 pops up "install command line tools": skip it
         if not py or py in seen or py == "/usr/bin/python3" or not os.path.isfile(py):
             continue
         seen.add(py)
@@ -491,38 +493,38 @@ def _transcribe_external(audio16k, model_name):
 
 
 def sentence_texts(words, segs, sr):
-    """把每个词分到它中点所在的那一句；落在句间空隙的词归到最近的一句。"""
+    """Put each word in the sentence that contains its midpoint; words in a gap between sentences go to the nearest sentence."""
     texts = [[] for _ in segs]
     starts = [a for a, b in segs]
     for start, end, word in words:
         mid = (start + end) / 2 * sr
-        i = max(0, bisect.bisect_right(starts, mid) - 1)  # 开始时间不晚于 mid 的最后一句
+        i = max(0, bisect.bisect_right(starts, mid) - 1)  # The last sentence that starts no later than mid
         if mid > segs[i][1] and i + 1 < len(segs) and segs[i + 1][0] - mid < mid - segs[i][1]:
-            i += 1  # 在空隙里，离下一句更近
+            i += 1  # In a gap, and nearer to the next sentence
         texts[i].append(word)
     return ["".join(t).strip() for t in texts]
 
 
-# ---------- 视频画面 ----------
+# ---------- Video picture ----------
 def has_video(path):
-    """有真正的视频画面才算（mp3/m4a 里的封面图也是一路"视频"，要排除）。"""
+    """Only real video counts (cover art in mp3/m4a is also a "video" stream and must be skipped)."""
     with av.open(path) as c:
         return any(not (vs.disposition & av.stream.Disposition.attached_pic)
                    for vs in c.streams.video)
 
 
 def fit(size, box):
-    """把 size 等比缩放到能放进 box 的最大尺寸（宽高取偶数，缩放器要求）。"""
+    """Scale size, keeping its shape, to the largest size that fits in box (even width and height, as the scaler requires)."""
     (w, h), (bw, bh) = size, box
     k = min(bw / w, bh / h)
     return max(2, int(w * k) // 2 * 2), max(2, int(h * k) // 2 * 2)
 
 
 class VideoDecoder:
-    """后台线程解码一段时间内的画面，缩放好后放进 frames 队列：(时间秒, PIL 图)。
-    每次 start 都是一个新任务；旧任务发现 gen 变了就自己退出。"""
+    """A background thread decodes the frames of a time range, scales them and puts them in the frames queue: (time s, PIL image).
+    Every start() is a new job; an old job sees that gen changed and stops by itself."""
 
-    MAX_QUEUE = 30  # 最多提前解码这么多帧，防止吃内存
+    MAX_QUEUE = 30  # Decode at most this many frames ahead, to save memory
 
     def __init__(self, path):
         self.path = path
@@ -536,7 +538,7 @@ class VideoDecoder:
             self.fps = float(vs.average_rate or 25)
 
     def start(self, t0, t1, box):
-        """解码 [t0, t1] 秒的画面；t0 == t1 时只取 t0 那一帧（暂停时显示用）。"""
+        """Decode the frames of [t0, t1] seconds; with t0 == t1 only the frame at t0 (shown while paused)."""
         self.cancel()
         threading.Thread(target=self._run, args=(self.gen, t0, t1, box),
                          daemon=True).start()
@@ -551,7 +553,7 @@ class VideoDecoder:
                 vs = c.streams[self.index]
                 vs.thread_type = "AUTO"
                 w, h = fit(self.size, box)
-                # seek 会落到 t0 之前最近的关键帧，从那里解码到 t0（这段不缩放，省时间）
+                # seek lands on the nearest keyframe before t0; decode from there up to t0 (without scaling, to save time)
                 c.seek(max(0, int(t0 / vs.time_base)), stream=vs)
                 early = t0 - 0.5 / self.fps
                 for f in c.decode(vs):
@@ -567,30 +569,30 @@ class VideoDecoder:
                     self.frames.append((f.time, img))
                     if f.time >= t1:
                         return
-        except Exception:  # 画面坏了不影响听，声音照常放
+        except Exception:  # A broken picture doesn't stop listening: sound plays as usual
             pass
 
 
-# ---------- 播放器界面 ----------
+# ---------- Player UI ----------
 class Player:
     def __init__(self, root, opts, parent=None):
-        """parent：嵌进别的程序（比如 app.py 的一个标签页）时传一个 tk.Frame；
-        不传就是独立窗口，和以前一样。"""
+        """parent: pass a tk.Frame to build inside another program (e.g. a tab in app.py);
+        without it, it's a window of its own, as before."""
         self.root, self.opts = root, opts
         self.embedded = parent is not None
         parent = parent or root
-        self.active = True  # 嵌入时由外面控制：不在当前标签页就不响应快捷键
+        self.active = True  # When embedded, the outside decides: shortcuts are ignored unless this is the current tab
         self.audio, self.sr, self.segs = None, None, []
         self.cur = 0
         self.played = False
         self.playing = False
         self.loading = False
         self.env, self.env_hop = None, 1
-        self.t0 = 0.0  # 当前句开始播放的时刻
-        self.view = (0, 1)  # 放大波形显示的采样范围
-        self.video = None   # VideoDecoder；纯音频文件为 None
-        self.photo = None   # 当前显示的画面（要留着引用，否则 Tk 会把图丢掉）
-        self.pending = None  # 等画面准备好再开始放声音：(句号, 截止时刻)
+        self.t0 = 0.0  # When the current sentence started playing
+        self.view = (0, 1)  # Sample range shown in the zoomed waveform
+        self.video = None   # VideoDecoder; None for audio-only files
+        self.photo = None   # The picture being shown (keep a reference, or Tk throws the image away)
+        self.pending = None  # Wait until the picture is ready before starting the sound: (sentence no., deadline)
 
         if not self.embedded:
             root.title("精听")
@@ -598,11 +600,11 @@ class Player:
 
         ui_style.apply(root)
         apply_audio_devices(opts)
-        # 音频重新初始化（闲置太久 / 出错重试）后，把设置里选的麦克风 / 扬声器再设一遍
+        # After audio is re-initialized (idle too long / retry after an error), set the chosen mic / speaker again
         audio_io.on_reinit(lambda: apply_audio_devices(self.opts))
         P = ui_style.PAD
 
-        # --- 工具栏（和转录页同一排版：左边打开文件，右边音量 / 设置） ---
+        # --- Toolbar (same layout as the transcribe tab: open file on the left, volume / settings on the right) ---
         top = self.top = ttk.Frame(parent, padding=(P, P, P, P))
         top.pack(fill="x")
         ttk.Button(top, text="打开文件…", takefocus=False,
@@ -621,7 +623,7 @@ class Player:
         self.vol_save_job = None
         self.set_volume(opts["volume"], save=False)
 
-        # 播放速度：变速不变调；[ 和 ] 键、在框上滚轮也能调
+        # Playback speed: changes speed without changing pitch; also [ and ] keys, and the mouse wheel over the box
         spd = ttk.Frame(top)
         spd.pack(side="right", padx=(0, 16))
         ttk.Label(spd, text="速度").pack(side="left", padx=(0, 6))
@@ -634,12 +636,12 @@ class Player:
         def on_speed(e):
             self.set_speed(SPEEDS[self.speed_box.current()])
             self.speed_box.selection_clear()
-            parent.focus_set()  # 焦点还给页面，空格等快捷键才继续有效
+            parent.focus_set()  # Give focus back to the page, so Space and other shortcuts keep working
         self.speed_box.bind("<<ComboboxSelected>>", on_speed)
-        self.play_ratio = 1.0  # 原始采样数 / 实际播放的采样数（变速后用来算进度线位置）
+        self.play_ratio = 1.0  # Original samples / samples actually played (used for the playhead position at other speeds)
         self.set_speed(opts["speed"], save=False)
 
-        # --- 拖放区 ---
+        # --- Drop zone ---
         self.drop = ui_style.drop_zone(parent, DROP_HINT)
         self.drop.pack(fill="x", padx=P)
         self.name, self.thr = "", None
@@ -663,8 +665,8 @@ class Player:
                  "在波形/画面上滚轮 = 上下句，在音量上滚轮 = 调音量"
                  ).pack(side="bottom", pady=(4, P))
 
-        # --- 字幕（设置里打开才显示） ---
-        # 用只读的 Text 而不是 Label：外观一样，但可以用鼠标选中、Ctrl+C 复制
+        # --- Subtitles (only shown when turned on in settings) ---
+        # A read-only Text instead of a Label: looks the same, but text can be selected with the mouse and copied with Ctrl+C
         self.sub = tk.Text(parent, font=(ui_style.TEXT_FONT, 15),
                            height=1, wrap="word", relief="flat", borderwidth=0,
                            highlightthickness=0, bg=parent.cget("bg"), cursor="xterm",
@@ -685,10 +687,10 @@ class Player:
         self.words, self.words_key, self.texts = None, None, []
         self.sub_error = None
         self.sub_gen = 0
-        self.revealed = False  # "听完再显示"模式：当前句字幕是否已揭晓（换句就重置）
-        self.hidden = False    # "一直显示"模式：按 T 临时隐藏
+        self.revealed = False  # "after" mode: whether the current sentence's subtitle has been revealed (reset when the sentence changes)
+        self.hidden = False    # "always" mode: hidden for now with T
 
-        # --- 鼠标控制按钮（和键盘快捷键做的事一样） ---
+        # --- Mouse control buttons (they do the same as the keyboard shortcuts) ---
         bar = self.bar = ttk.Frame(parent)
         bar.pack(pady=(2, 6))
         self.buttons = {}
@@ -698,12 +700,12 @@ class Player:
                 ("main", "▶ 播放", self.on_space, 10),
                 ("next", "下一句 ⏭", self.next, 9),
                 ("sub", "显示字幕", self.toggle_sub, 9)):
-            # takefocus=False：按钮不抢键盘焦点，否则按空格会把按钮也"按"一次
+            # takefocus=False: buttons don't take keyboard focus, otherwise Space would also "press" the button
             b = ttk.Button(bar, text=text, width=width, command=cmd, style="Big.TButton",
                            takefocus=False, cursor="hand2")
             b.pack(side="left", padx=3)
             self.buttons[key] = b
-        # 字幕模式下拉框：不用进设置就能切换（和设置里的是同一个选项）
+        # Subtitle mode dropdown: switch without opening the settings (same option as in the settings)
         self.sub_mode_var = tk.StringVar(value=SUB_MODES[opts["subtitles"]])
         mode_of = {v: k for k, v in SUB_MODES.items()}
         om = ttk.Combobox(bar, textvariable=self.sub_mode_var, values=list(SUB_MODES.values()),
@@ -712,13 +714,13 @@ class Player:
         def on_mode(e):
             self.set_sub_mode(mode_of[self.sub_mode_var.get()])
             om.selection_clear()
-            parent.focus_set()  # 焦点还给页面，空格等快捷键才继续有效
+            parent.focus_set()  # Give focus back to the page, so Space and other shortcuts keep working
         om.bind("<<ComboboxSelected>>", on_mode)
         om.pack(side="left", padx=(6, 3), ipady=3)
 
-        # 自动下一句：一句播完，等 N 秒自动播放下一句
-        self.auto_job = None   # root.after 的任务；None = 没有在倒计时
-        self.auto_due = 0.0    # 倒计时结束的时刻（time.monotonic）
+        # Auto next: when a sentence finishes, wait N seconds, then play the next one
+        self.auto_job = None   # The root.after job; None = no countdown running
+        self.auto_due = 0.0    # When the countdown ends (time.monotonic)
         auto = ttk.Frame(bar)
         auto.pack(side="left", padx=(12, 0))
         self.auto_var = tk.BooleanVar(value=opts["auto_next"])
@@ -733,7 +735,7 @@ class Player:
         self.delay_spin.bind("<Return>", lambda e: self.on_auto_change(give_back_focus=True))
         self.delay_spin.bind("<FocusOut>", lambda e: self.on_auto_change())
 
-        # --- 视频画面（只有视频文件才显示） ---
+        # --- Video picture (only shown for video files) ---
         self.screen = tk.Canvas(parent, width=640, height=360, bg="black",
                                 highlightthickness=0, cursor="hand2")
         self.screen.bind("<Button-1>", lambda e: self.play(self.cur))
@@ -741,7 +743,7 @@ class Player:
         self.resize_job = None
         self.screen_img = self.screen.create_image(0, 0, anchor="center")
 
-        # --- 波形：上面是当前句放大，下面是整段总览 ---
+        # --- Waveforms: zoomed current sentence on top, whole-file overview below ---
         self.detail = tk.Canvas(parent, height=140, bg="white", highlightthickness=1,
                                 highlightbackground=ui_style.DROP_BORDER, cursor="hand2")
         self.detail.pack(fill="both", expand=True, padx=P, pady=(4, 4))
@@ -759,7 +761,7 @@ class Player:
         self.bind_key("<Left>", self.prev)
         self.bind_key("<Right>", self.next)
 
-        # --- 鼠标滚轮：在波形/画面上滚 = 上下句；在音量上滚 = 调音量 ---
+        # --- Mouse wheel: over the waveform/picture = previous/next sentence; over the volume = change volume ---
         self.wheel_last = 0.0
         for w in (self.detail, self.overview, self.screen):
             self.bind_wheel(w, lambda step: self.next() if step > 0 else self.prev())
@@ -774,9 +776,9 @@ class Player:
             self.bind_key(k, lambda: self.set_volume(self.opts["volume"] - 0.25))
         self.bind_key("[", lambda: self.step_speed(-1))
         self.bind_key("]", lambda: self.step_speed(+1))
-        for w in (spd, self.speed_box):  # 滚轮往上 = 快一档
+        for w in (spd, self.speed_box):  # Wheel up = one step faster
             self.bind_wheel(w, lambda step: self.step_speed(-step), throttle=0.1)
-        if not self.embedded:  # 嵌入时由外面的程序负责退出
+        if not self.embedded:  # When embedded, the outer program takes care of quitting
             for k in ("q", "Q", "<Escape>"):
                 self.bind_key(k, self.quit)
             root.protocol("WM_DELETE_WINDOW", self.quit)
@@ -786,7 +788,7 @@ class Player:
         self.poll()
 
     def bind_key(self, key, fn):
-        """快捷键绑在整个窗口上；不在当前标签页、或者正在别的输入框里打字时不响应。"""
+        """Shortcuts are bound to the whole window; they are ignored when this isn't the current tab, or while typing in another input box."""
         def handler(e):
             w = e.widget
             typing = (isinstance(w, tk.Misc) and w is not self.sub
@@ -796,9 +798,9 @@ class Player:
                 fn()
         self.root.bind(key, handler, add="+")
 
-    # ---------- 选文件 ----------
+    # ---------- Choosing a file ----------
     def on_drop(self, event):
-        files = self.root.tk.splitlist(event.data)  # 处理带空格的路径
+        files = self.root.tk.splitlist(event.data)  # Handles paths that contain spaces
         if files:
             self.open_file(files[0])
 
@@ -830,9 +832,9 @@ class Player:
             err = None if segs else "没有检测到句子，试试在设置里调低静音阈值"
             try:
                 video = VideoDecoder(path) if has_video(path) else None
-            except Exception:  # 画面读不了就当纯音频用
+            except Exception:  # If the picture can't be read, treat it as audio only
                 video = None
-        except Exception as ex:  # 解码失败等
+        except Exception as ex:  # Decoding failed, etc.
             audio = sr = segs = env = thr = video = None
             err = f"无法读取：{ex}"
         self.root.after(0, self._loaded, path, audio, sr, segs, err, env, thr, video)
@@ -860,15 +862,15 @@ class Player:
         self.refresh("按空格开始")
         self.preview()
 
-    # ---------- 字幕 ----------
+    # ---------- Subtitles ----------
     def start_subs(self):
-        """字幕打开时在后台识别（有缓存就直接读）；识别完自动显示。"""
+        """When subtitles are on, recognize in the background (read the cache if there is one); show them when done."""
         self.sub_error = None
         model = self.opts["whisper_model"]
         if self.opts["subtitles"] == "off" or not self.path:
             return
         if self.words_key == (self.path, model):
-            return  # 这个文件用这个模型已经识别过
+            return  # This file was already recognized with this model
         self.words, self.texts = None, []
         self.sub_gen += 1
         gen, path = self.sub_gen, self.path
@@ -886,7 +888,7 @@ class Player:
 
     def _subs_done(self, gen, path, model, words, err):
         if gen != self.sub_gen:
-            return  # 中途换了文件或模型，结果作废
+            return  # The file or model changed meanwhile: throw the result away
         self.sub_error = err
         if words is not None:
             self.words, self.words_key = words, (path, model)
@@ -894,9 +896,9 @@ class Player:
         self.update_sub()
 
     def set_sub(self, text, color):
-        """改字幕框里的文字（只读 Text：先解锁、改完再锁上，用户不能打字但能选中）。"""
+        """Change the text in the subtitle box (read-only Text: unlock, change, lock again; the user can't type but can select)."""
         if text == self.sub.get("1.0", "end-1c") and color == self.sub.cget("fg"):
-            return  # 没变就不重写，免得把用户正在选的文字弄没
+            return  # If nothing changed, don't rewrite it, or the user's selection would be lost
         self.sub.config(state="normal", fg=color)
         self.sub.delete("1.0", "end")
         self.sub.insert("1.0", text, "center")
@@ -904,7 +906,7 @@ class Player:
         self.fit_sub_height()
 
     def fit_sub_height(self):
-        """按换行后的实际行数调整高度（1~4 行）。"""
+        """Set the height from the real number of lines after wrapping (1-4 lines)."""
         n = self.sub.count("1.0", "end", "displaylines")
         n = n[0] if isinstance(n, tuple) else n
         self.sub.config(height=max(1, min(4, n or 1)))
@@ -917,7 +919,7 @@ class Player:
     def copy_selection(self):
         try:
             self.copy_text(self.sub.get("sel.first", "sel.last"))
-        except tk.TclError:  # 没选中任何文字
+        except tk.TclError:  # Nothing selected
             self.copy_text(self.sub_text)
 
     def update_sub(self):
@@ -936,10 +938,10 @@ class Player:
             text, color = "（字幕已隐藏，按 T 显示）", "#aaa"
         else:
             text, color = self.texts[self.cur] or "（这句没识别出文字）", "#222"
-        # 只有真正的字幕才给"复制整句"用，提示语不算
+        # Only a real subtitle is used for "复制整句" (copy whole sentence); hint text is not
         self.sub_text = self.texts[self.cur] if color == "#222" and self.texts else ""
         self.set_sub(text, color)
-        # 字幕关闭时把这一行收起来，不留空白
+        # When subtitles are off, collapse this row so it leaves no gap
         if mode == "off" and self.sub.winfo_manager():
             self.sub.pack_forget()
         elif mode != "off" and not self.sub.winfo_manager():
@@ -947,8 +949,8 @@ class Player:
         self.update_buttons()
 
     def toggle_sub(self):
-        """T 键 / 字幕按钮："一直显示"模式下整体隐藏/显示；
-        "听完再显示"和"手动显示"模式下揭晓/再盖住当前句。"""
+        """T key / subtitle button: in "always" mode hide/show everything;
+        in "after" and "manual" modes reveal/cover the current sentence."""
         if self.opts["subtitles"] == "always":
             self.hidden = not self.hidden
         else:
@@ -961,7 +963,7 @@ class Player:
                 or (mode in ("after", "manual") and self.revealed))
 
     def set_sub_mode(self, mode):
-        """主窗口下拉框切换字幕模式：立即生效并保存，需要时开始识别。"""
+        """Subtitle mode changed in the main window dropdown: takes effect right away and is saved; starts recognition if needed."""
         if mode == self.opts["subtitles"]:
             return
         self.opts["subtitles"] = mode
@@ -971,7 +973,7 @@ class Player:
         self.update_sub()
 
     def set_video(self, video):
-        """有画面就把视频区插到波形上面，波形和大字缩小；纯音频恢复原样。"""
+        """For video, put the picture area above the waveforms and make the waveforms and big title smaller; for audio only, restore the layout."""
         self.video = video
         self.photo = None
         self.screen.itemconfig(self.screen_img, image="")
@@ -1004,7 +1006,7 @@ class Player:
                               "（拖入其他文件可替换）")
 
     def resplit(self):
-        """设置改了之后，用新参数重新断句；尽量停在原来听到的位置。"""
+        """After the settings change, split again with the new options; try to stay where you were listening."""
         if self.audio is None:
             return
         segs, thr = self.split(self.audio, self.sr)
@@ -1016,13 +1018,13 @@ class Player:
         self.segs, self.thr = segs, thr
         self.cur = max(i for i, (s, e) in enumerate(segs) if s <= pos or i == 0)
         self.revealed = False
-        if self.words is not None:  # 字幕不用重新识别，按新句子重新分配就行
+        if self.words is not None:  # No need to recognize the subtitles again; just reassign them to the new sentences
             self.texts = sentence_texts(self.words, segs, self.sr)
         self.show_file_info()
         self.refresh("已按新设置重新断句")
         self.preview()
 
-    # ---------- 设置窗口 ----------
+    # ---------- Settings window ----------
     def open_settings(self):
         if self.settings_win and self.settings_win.winfo_exists():
             self.settings_win.lift()
@@ -1042,7 +1044,7 @@ class Player:
             "max_len": tk.DoubleVar(value=o["max_len"]),
             "pad": tk.DoubleVar(value=o["pad"]),
         }
-        rows = [  # (键, 标题, 最小, 最大, 步长, 说明)
+        rows = [  # (key, title, min, max, step, explanation)
             ("threshold", "静音阈值 (dB)", -60, -5, 1,
              "呼吸声被当成说话 → 调高（如 -25）；吞字 → 调低（如 -40）"),
             ("min_silence", "断句静音 (秒)", 0.1, 1.5, 0.05,
@@ -1070,7 +1072,7 @@ class Player:
                 row=r + 1, column=0, columnspan=3, sticky="w")
             r += 2
 
-        # --- 字幕 ---
+        # --- Subtitles ---
         ttk.Separator(frm).grid(row=r, column=0, columnspan=3, sticky="we", pady=(12, 4))
         label_of = SUB_MODES
         key_of = {v: k for k, v in label_of.items()}
@@ -1089,7 +1091,7 @@ class Player:
                       "模型越大越准越慢：tiny / base 快，small 平衡，medium / large 准").grid(
             row=r + 3, column=0, columnspan=3, sticky="w")
 
-        # --- 音频设备 ---
+        # --- Audio devices ---
         ttk.Separator(frm).grid(row=r + 4, column=0, columnspan=3, sticky="we", pady=(12, 4))
         mic = tk.StringVar(value=o["mic"] or SYSTEM_DEVICE)
         speaker = tk.StringVar(value=o["speaker"] or SYSTEM_DEVICE)
@@ -1113,7 +1115,7 @@ class Player:
                 except Exception:
                     names = []
                 dev_boxes[kind]["values"] = [SYSTEM_DEVICE] + names
-                if var.get() not in names:  # 选过的设备现在没插着
+                if var.get() not in names:  # The device chosen before is not plugged in now
                     var.set(SYSTEM_DEVICE)
 
         def sync_auto():
@@ -1143,7 +1145,7 @@ class Player:
             self.resplit()
             self.start_subs()
             self.update_sub()
-            if self.thr is not None and auto.get():  # 显示自动算出的阈值，方便参考
+            if self.thr is not None and auto.get():  # Show the automatically computed threshold, for reference
                 vars_["threshold"].set(round(self.thr))
 
         def reset():
@@ -1166,15 +1168,15 @@ class Player:
         sync_auto()
         load_devices()
 
-    # ---------- 播放 ----------
-    # ---------- 自动下一句 ----------
+    # ---------- Playback ----------
+    # ---------- Auto next ----------
     def on_auto_change(self, give_back_focus=False):
-        """勾选框 / 秒数改了：检查秒数、保存设置；关掉时取消正在进行的倒计时。"""
+        """The checkbox / seconds changed: check the seconds and save settings; when turned off, cancel a running countdown."""
         lo, hi = AUTO_DELAY_RANGE
         try:
             delay = min(hi, max(lo, float(self.delay_var.get())))
         except ValueError:
-            delay = self.opts["auto_delay"]  # 填的不是数字：恢复原来的值
+            delay = self.opts["auto_delay"]  # Not a number: restore the old value
         self.delay_var.set(f"{delay:g}")
         changed = (self.opts["auto_next"], self.opts["auto_delay"]) != (self.auto_var.get(), delay)
         self.opts["auto_next"], self.opts["auto_delay"] = self.auto_var.get(), delay
@@ -1184,10 +1186,10 @@ class Player:
             self.cancel_auto()
             self.refresh("⏸ 已暂停，按空格继续")
         if give_back_focus:
-            self.bar.master.focus_set()  # 焦点还给页面，空格等快捷键才继续有效
+            self.bar.master.focus_set()  # Give focus back to the page, so Space and other shortcuts keep working
 
     def schedule_auto(self):
-        """当前句刚播完时调用：开了自动下一句、又不是最后一句，就开始倒计时。"""
+        """Called just after the current sentence finishes: if auto next is on and this isn't the last sentence, start the countdown."""
         if not self.opts["auto_next"] or self.cur >= len(self.segs) - 1:
             return False
         delay = self.opts["auto_delay"]
@@ -1209,7 +1211,7 @@ class Player:
         if not self.segs:
             return
         if self.playing or self.pending or self.auto_job:
-            self.stop_all()  # 倒计时中按空格 = 取消自动播放，停在这一句
+            self.stop_all()  # Space during the countdown = cancel auto play and stay on this sentence
             self.refresh("已停止")
         elif not self.played:
             self.play(self.cur)
@@ -1223,11 +1225,11 @@ class Player:
             return
         self.stop_all()
         if idx != self.cur:
-            self.revealed = False  # 换了一句，字幕重新盖住（重听同一句不盖）
+            self.revealed = False  # A different sentence: cover the subtitle again (not when replaying the same one)
         self.cur = idx
         self.played = True
         if self.video:
-            # 先让画面解码到这句开头，最多等 1.5 秒，再一起开始，避免声音先跑
+            # First let the picture decode up to the start of this sentence (wait at most 1.5 s), then start both together, so the sound doesn't run ahead
             s, e = self.segs[idx]
             self.video.start(s / self.sr, e / self.sr, self.screen_box())
             self.pending = (idx, time.monotonic() + 1.5)
@@ -1242,12 +1244,12 @@ class Player:
         self.play(min(len(self.segs) - 1, self.cur + 1))
 
     def bind_wheel(self, widget, fn, throttle=0.15):
-        """滚轮往上 fn(-1)，往下 fn(+1)。throttle 秒内只算一次，触控板一划不会连跳好几句。"""
+        """Wheel up calls fn(-1), wheel down fn(+1). Counted only once per throttle seconds, so one trackpad swipe doesn't skip several sentences."""
         def handler(e):
             now = time.monotonic()
             if now - self.wheel_last < throttle:
                 return "break"
-            d = {4: 1, 5: -1}.get(e.num, e.delta)  # Linux 用 Button-4/5，其他系统用 delta
+            d = {4: 1, 5: -1}.get(e.num, e.delta)  # Linux uses Button-4/5, other systems use delta
             if d:
                 self.wheel_last = now
                 fn(-1 if d > 0 else 1)
@@ -1263,7 +1265,7 @@ class Player:
         elif not self.played:
             main = "▶ 开始"
         else:
-            main = "▶ 继续"  # 和空格一样：播放下一句
+            main = "▶ 继续"  # Same as Space: play the next sentence
         b = self.buttons
         b["main"].config(text=main)
         has = "normal" if self.segs else "disabled"
@@ -1278,8 +1280,8 @@ class Player:
         self.sub_mode_var.set(SUB_MODES[self.opts["subtitles"]])
 
     def set_volume(self, v, save=True):
-        """改音量：下一次播放生效；停一会儿再存盘，拖滑块时不会一直写文件。"""
-        v = round(min(2.5, max(0.5, v)), 2)  # 再大也只是限幅压得更狠，不会更响
+        """Change the volume: takes effect on the next playback; saved after a short pause, so dragging the slider doesn't keep writing the file."""
+        v = round(min(2.5, max(0.5, v)), 2)  # Higher values would only limit harder, not get louder
         self.opts["volume"] = v
         self.vol_var.set(round(v * 100))
         self.vol_label.config(text=f"音量 {v * 100:.0f}%")
@@ -1289,8 +1291,8 @@ class Player:
             self.vol_save_job = self.root.after(800, lambda: save_settings(self.opts))
 
     def set_speed(self, v, save=True):
-        """换播放速度。正在播放时用新速度从这句开头重放，马上就能听出差别。"""
-        v = min(SPEEDS, key=lambda x: abs(x - v))  # 对齐到最近的一档
+        """Change the playback speed. While playing, replay this sentence from the start at the new speed, so you hear the difference right away."""
+        v = min(SPEEDS, key=lambda x: abs(x - v))  # Snap to the nearest step
         self.opts["speed"] = v
         self.speed_var.set(speed_label(v))
         if save:
@@ -1315,11 +1317,11 @@ class Player:
         data = self.audio[s:e]
         try:
             data = stretch(data, self.sr, self.opts["speed"])
-        except Exception:  # 变速失败就按原速放，不影响听
+        except Exception:  # If changing the speed fails, play at normal speed; listening still works
             audio_io.log.exception("变速失败，按原速播放")
         self.play_ratio = (e - s) / max(1, len(data))
         try:
-            # 出错会自动重新初始化音频再试一次（见 audio_io）
+            # On error, re-initialize audio and try once more (see audio_io)
             audio_io.call(sd.play, boost(data, self.sr, self.opts["volume"]), self.sr)
         except audio_io.AudioError as ex:
             self.playing = False
@@ -1332,7 +1334,7 @@ class Player:
         self.refresh(self.playing_msg())
 
     def show_error(self, msg):
-        """错误显示在状态行（红字），下一次 refresh 恢复正常颜色。"""
+        """Show an error in the status line (red text); the next refresh restores the normal color."""
         if self.segs:
             self.refresh(msg)
         self.status.config(text=msg, fg="#c33")
@@ -1340,7 +1342,7 @@ class Player:
     def stop_all(self):
         try:
             sd.stop()
-        except Exception:  # 设备已经没了也要能停：状态照样复位，下次播放会重新初始化
+        except Exception:  # Stopping must work even if the device is gone: reset the state anyway; the next playback re-initializes
             audio_io.log.exception("停止播放时出错")
         self.playing = False
         self.pending = None
@@ -1349,15 +1351,15 @@ class Player:
             self.video.cancel()
 
     def preview(self):
-        """暂停状态下显示当前句第一帧。"""
+        """While paused, show the first frame of the current sentence."""
         if self.video and self.segs:
-            self.root.update_idletasks()  # 视频区刚显示出来时先让它排好版，才知道多大
+            self.root.update_idletasks()  # The picture area has just appeared: let it lay out first so we know its size
             t = self.segs[self.cur][0] / self.sr
             self.video.start(t, t, self.screen_box())
 
     def poll(self):
-        # 不管这一轮出了什么错，都要排好下一轮——以前一出错这个循环就永远停了，
-        # 之后播放状态再也不会更新，看起来就像按钮没反应
+        # Whatever goes wrong in this round, always schedule the next one - before, one error stopped this loop for good,
+        # after which the playback state never updated again, and it looked like the buttons did nothing
         try:
             self._poll_once()
         except Exception:
@@ -1368,7 +1370,7 @@ class Player:
         try:
             stream = sd.get_stream()
             return stream is not None and stream.active
-        except Exception:  # 流所在的设备没了：当作已经放完
+        except Exception:  # The stream's device is gone: treat it as finished
             audio_io.log.exception("查询播放状态出错")
             return False
 
@@ -1379,9 +1381,9 @@ class Player:
             if not self.stream_active():
                 self.playing = False
                 if self.video:
-                    self.video.cancel()  # 画面停在最后显示的那一帧
+                    self.video.cancel()  # The picture stays on the last frame shown
                 if self.opts["subtitles"] == "after":
-                    self.revealed = True  # 听完了，揭晓字幕（手动模式不自动揭晓）
+                    self.revealed = True  # Finished listening: reveal the subtitle (manual mode doesn't reveal by itself)
                 if self.schedule_auto():
                     self.refresh(self.auto_msg())
                 elif self.opts["auto_next"] and self.cur == len(self.segs) - 1:
@@ -1390,23 +1392,23 @@ class Player:
                     self.refresh("⏸ 已暂停，按空格继续")
             else:
                 s, e = self.segs[self.cur]
-                pos = min(e, s + (time.monotonic() - self.t0) * self.sr * self.play_ratio)  # 变速后按比例换算回原音频位置
+                pos = min(e, s + (time.monotonic() - self.t0) * self.sr * self.play_ratio)  # At other speeds, scale back to the position in the original audio
                 self.move_playhead(pos)
                 if self.video:
                     self.show_due_frame(pos / self.sr)
         elif self.video and self.video.frames and not self.pending:
-            self.show_frame(self.video.frames.pop()[1])  # 预览帧
+            self.show_frame(self.video.frames.pop()[1])  # Preview frame
             self.video.frames.clear()
         if self.auto_job and not self.playing:
-            self.status.config(text=self.auto_msg())  # 倒计时：每次刷新剩下的秒数
+            self.status.config(text=self.auto_msg())  # Countdown: update the seconds left each time
 
     def auto_msg(self):
         left = max(0.0, self.auto_due - time.monotonic())
         return f"⏸ {left:.1f} 秒后自动播放下一句（空格 = 取消）"
 
-    # ---------- 画面 ----------
+    # ---------- Picture ----------
     def show_due_frame(self, now):
-        """按声音的时钟显示画面：取出所有时间已到的帧，只显示最新的（落后了就跳帧）。"""
+        """Show frames by the sound's clock: take out all frames whose time has come and show only the newest (drop frames when behind)."""
         q, img = self.video.frames, None
         while q and q[0][0] <= now:
             img = q.popleft()[1]
@@ -1419,7 +1421,7 @@ class Player:
         self.center_frame()
 
     def on_screen_resize(self):
-        """窗口大小变了：暂停时按新尺寸重新取一帧（停一下再取，拖动窗口时不会狂解码）。"""
+        """The window size changed: while paused, get a frame at the new size (after a short wait, so dragging the window doesn't decode like mad)."""
         self.center_frame()
         if self.resize_job:
             self.root.after_cancel(self.resize_job)
@@ -1443,14 +1445,14 @@ class Player:
         self.update_buttons()
         self.draw_waves()
 
-    # ---------- 波形 ----------
+    # ---------- Waveforms ----------
     def draw_waves(self):
         if self.env is None or not self.segs:
             return
         hop, total = self.env_hop, len(self.audio)
         s, e = self.segs[self.cur]
 
-        # 当前句放大：前后各多看 0.3 秒，方便看清断句位置
+        # Zoomed current sentence: show 0.3 s more on each side, to see clearly where the cut is
         cv = self.detail
         cv.delete("all")
         w, h = cv.winfo_width(), cv.winfo_height()
@@ -1472,18 +1474,18 @@ class Player:
                            text=fmt(b / self.sr))
             self.detail_head = cv.create_line(-5, 0, -5, h, fill="#e5484d", width=2)
 
-        # 整段总览：浅色块是每一句；当前句 = 深色块 + 蓝框 + 蓝色波形 + 顶上的 ▼，句子多时也一眼能找到
+        # Whole-file overview: a light block for each sentence; current sentence = dark block + blue frame + blue waveform + a ▼ on top, easy to spot even with many sentences
         cv = self.overview
         cv.delete("all")
         w, h = cv.winfo_width(), cv.winfo_height()
         if w > 2:
-            top = 9  # 顶上留给 ▼ 的高度
+            top = 9  # Height kept free at the top for the ▼
             mid = (top + h) / 2
             for a, b in self.segs:
                 cv.create_rectangle(self.to_x(a, w, 0, total), top, self.to_x(b, w, 0, total),
                                     h - 2, outline="", fill="#e1ecff")
             xs, xe = self.to_x(s, w, 0, total), self.to_x(e, w, 0, total)
-            if xe - xs < 8:  # 句子太短时框至少 8 像素宽，不然看不见
+            if xe - xs < 8:  # For very short sentences the frame is at least 8 px wide, or it can't be seen
                 c = (xs + xe) / 2
                 xs, xe = c - 4, c + 4
             cv.create_rectangle(xs, top, xe, h - 2, fill="#a9c8ff", outline="#2a6fdb", width=2)
@@ -1492,7 +1494,7 @@ class Player:
                 y = v * (h - 2 - mid - 2)
                 cv.create_line(x, mid - y, x, mid + y + 1,
                                fill="#1f5fd0" if xs <= x <= xe else "#7d8696")
-            c = min(max((xs + xe) / 2, 6), w - 6)  # 第一句 / 最后一句时 ▼ 不被边缘切掉
+            c = min(max((xs + xe) / 2, 6), w - 6)  # Keep the ▼ from being cut off at the edge for the first / last sentence
             cv.create_polygon(c - 6, 0, c + 6, 0, c, top - 1, fill="#2a6fdb", outline="")
             self.overview_head = cv.create_line(-5, 0, -5, h, fill="#e5484d", width=2)
 
@@ -1511,7 +1513,7 @@ class Player:
         if not self.segs:
             return
         pos = event.x / max(1, self.overview.winfo_width()) * len(self.audio)
-        # 点在句子里就选这句，点在静音处就选最近的一句
+        # Click inside a sentence selects it; click in a silence selects the nearest sentence
         dist = [0 if a <= pos <= b else min(abs(pos - a), abs(pos - b))
                 for a, b in self.segs]
         self.play(dist.index(min(dist)))

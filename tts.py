@@ -1,13 +1,16 @@
-"""文字转语音（「朗读」页用）。
+"""Text to speech (used by the 朗读 / Read aloud tab).
 
-两种引擎：
-  Edge 在线语音（edge-tts）：微软的神经网络语音，有加拿大口音；要联网。
-  Kokoro 离线语音（kokoro-onnx）：第一次要下载约 120 MB 模型，之后不用联网。
-引擎选「自动」时先用 Edge，连不上就整段改用 Kokoro（下载过的话）。
+Two engines:
+  Edge online voices (edge-tts): Microsoft neural voices, including Canadian accents; needs internet.
+  Kokoro offline voices (kokoro-onnx): downloads a ~120 MB model the first time, then works offline.
+With the engine set to "自动" (auto), Edge is tried first; if it can't connect, the whole text
+uses Kokoro instead (if it has been downloaded).
 
-文字按句子分开合成，句子之间插入固定停顿；结果里有每句在文字里的位置和在音频里的
-起止时间，朗读时用来高亮正在读的那一句，逐句对比时用来切出每一句。
-同样的文字 + 语音 + 语速 + 停顿只合成一次，结果缓存在 app_paths.CACHE_DIR。
+Text is synthesized sentence by sentence, with a fixed pause between sentences. The result
+holds each sentence's position in the text and its start/end time in the audio: used to
+highlight the sentence being read, and to cut out each sentence when comparing.
+The same text + voice + rate + pause is only synthesized once; results are cached in
+app_paths.CACHE_DIR.
 """
 import asyncio
 import hashlib
@@ -25,9 +28,9 @@ import numpy as np
 
 import app_paths
 
-SR = 24000   # 两种引擎都输出 24 kHz 单声道
+SR = 24000   # Both engines output 24 kHz mono
 
-# (设置里存的 id = Edge 语音名, 显示名, Kokoro 语音, Kokoro 口音)
+# (id saved in settings = Edge voice name, display name, Kokoro voice, Kokoro accent)
 VOICES = [
     ("en-CA-ClaraNeural", "加拿大 · 女 · Clara", "af_heart", "en-us"),
     ("en-CA-LiamNeural", "加拿大 · 男 · Liam", "am_michael", "en-us"),
@@ -61,19 +64,19 @@ class Cancelled(Exception):
 
 @dataclass
 class Speech:
-    path: str        # 合成好的 WAV
+    path: str        # The synthesized WAV
     engine: str      # "edge" / "kokoro"
-    spans: list      # 每句在文字里的 (起, 止) 字符位置
-    times: list      # 每句在音频里的 (起, 止) 秒
+    spans: list      # Each sentence's (start, end) character position in the text
+    times: list      # Each sentence's (start, end) time in the audio, in seconds
 
 
-# ---------- 断句 ----------
+# ---------- Sentence splitting ----------
 _SENT_END = re.compile(r"[.!?]+[\"'”’)\]]*(?=\s|$)|\n")
 _ABBREV = {"mr", "mrs", "ms", "dr", "st", "jr", "sr", "vs", "etc", "e.g", "i.e", "no", "prof"}
 
 
 def split_sentences(text):
-    """返回每句的 (起, 止) 字符位置（去掉了两头空白；没有字母数字的段落跳过）。"""
+    """Return each sentence's (start, end) character position (surrounding spaces removed; parts with no letters or digits are skipped)."""
     spans, start = [], 0
 
     def add(a, b):
@@ -87,7 +90,7 @@ def split_sentences(text):
         if m.group() != "\n":
             word = re.search(r"([A-Za-z.]+)\.*$", text[start:m.start()])
             if word and word.group(1).lower().rstrip(".") in _ABBREV:
-                continue   # Mr. / e.g. 之类的缩写，不算一句结束
+                continue   # Abbreviations like Mr. / e.g. don't end a sentence
             end = m.end()
         else:
             end = m.start()
@@ -97,7 +100,7 @@ def split_sentences(text):
     return spans
 
 
-# ---------- Edge 在线语音 ----------
+# ---------- Edge online voices ----------
 def _edge_say(text, voice, speed):
     import edge_tts
 
@@ -119,7 +122,7 @@ def _edge_say(text, voice, speed):
 
 
 def _decode(data):
-    """mp3 字节 → 24 kHz 单声道 float32。"""
+    """mp3 bytes -> 24 kHz mono float32."""
     out = []
     with av.open(io.BytesIO(data)) as c:
         rs = av.AudioResampler(format="flt", layout="mono", rate=SR)
@@ -129,7 +132,7 @@ def _decode(data):
     return np.concatenate(out).astype(np.float32) if out else np.zeros(0, np.float32)
 
 
-# ---------- Kokoro 离线语音 ----------
+# ---------- Kokoro offline voices ----------
 _kokoro = None
 _kokoro_lock = threading.Lock()
 
@@ -139,10 +142,10 @@ def offline_ready():
 
 
 def download_offline(progress=None, cancel=None):
-    """下载 Kokoro 模型（约 120 MB）。progress(已下载字节, 总字节)。先写 .part，下完再改名。"""
+    """Download the Kokoro model (~120 MB). progress(bytes done, total bytes). Writes a .part file first and renames it when complete."""
     os.makedirs(KOKORO_DIR, exist_ok=True)
     sizes = {}
-    for name in KOKORO_FILES:   # 先问清楚总大小，进度条才准
+    for name in KOKORO_FILES:   # Ask for the total size first, so the progress bar is accurate
         req = urllib.request.Request(_KOKORO_URL + name, method="HEAD")
         with urllib.request.urlopen(req, timeout=30) as r:
             sizes[name] = int(r.headers.get("Content-Length") or 0)
@@ -179,17 +182,17 @@ def _kokoro_say(text, voice_id, speed):
                              os.path.join(KOKORO_DIR, KOKORO_FILES[1]))
         _, _, kvoice, lang = next(v for v in VOICES if v[0] == voice_id)
         have = _kokoro.get_voices()
-        if kvoice not in have:   # 模型里没有这个声音：换一个同性别的
+        if kvoice not in have:   # The model doesn't have this voice: use another one of the same gender
             same = [v for v in have if v[:2] == kvoice[:2]] or [v for v in have if v[1] == kvoice[1]]
             kvoice = (same or list(have))[0]
         audio, sr = _kokoro.create(text, voice=kvoice, speed=speed, lang=lang)
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
-    if sr != SR:   # 现在的模型就是 24 kHz；以防万一
+    if sr != SR:   # Current models are 24 kHz already; just in case
         audio = np.interp(np.arange(0, len(audio), sr / SR), np.arange(len(audio)), audio)
     return audio.astype(np.float32)
 
 
-# ---------- 合成整段 ----------
+# ---------- Synthesizing the whole text ----------
 def _cache_paths(text, voice, speed, pause, engine):
     key = json.dumps([text, voice, round(speed, 2), round(pause, 2), engine], ensure_ascii=False)
     h = hashlib.sha1(key.encode("utf-8")).hexdigest()
@@ -238,15 +241,15 @@ def _render(text, spans, voice, speed, pause, engine, progress, cancel):
 
 
 def synthesize(text, voice, speed=1.0, pause=0.6, engine="auto", progress=None, cancel=None):
-    """把整段文字合成成一个 WAV，返回 Speech。
-    progress(已合成句数, 总句数, 引擎)；cancel 是 threading.Event，设了就抛 Cancelled。"""
+    """Synthesize the whole text into one WAV and return a Speech.
+    progress(sentences done, total sentences, engine); cancel is a threading.Event - when set, raises Cancelled."""
     spans = split_sentences(text)
     if not spans:
         raise TTSError("没有可以朗读的文字")
     if voice not in VOICE_NAMES:
         voice = VOICE_IDS[0]
     order = {"auto": ["edge", "kokoro"], "edge": ["edge"], "offline": ["kokoro"]}[engine]
-    for eng in order:   # 缓存里已经有，就不用再合成
+    for eng in order:   # Already in the cache: no need to synthesize again
         hit = _from_cache(text, voice, speed, pause, eng)
         if hit and hit.spans == spans:
             return hit
@@ -259,5 +262,5 @@ def synthesize(text, voice, speed=1.0, pause=0.6, engine="auto", progress=None, 
             raise
         if len(order) == 1 or not offline_ready():
             raise TTSError(f"连不上 Edge 在线语音（{e}）") from e
-        # 「自动」：在线不行就整段改用离线语音（不混用两种声音）
+        # "自动" (auto): if online fails, use the offline voice for the whole text (never mix two voices)
         return _render(text, spans, voice, speed, pause, "kokoro", progress, cancel)

@@ -1,4 +1,4 @@
-"""转录页（app.py 的「转录 / 录音」标签）: drag-and-drop audio -> English text with
+"""The transcribe tab (the "转录 / 录音" tab in app.py): drag-and-drop audio -> English text with
 OpenAI Whisper, plus playback, 60/90 s recording and saving audio.
 This file is a module only; start the program with: python app.py
 
@@ -216,7 +216,7 @@ class Player:
             except ImportError:
                 raise RuntimeError("没有安装 sounddevice，请运行："
                                    "pip install sounddevice") from None
-            # 打开失败会重新初始化音频再试一次；打开后播放期间不让别处重新初始化（见 audio_io）
+            # If opening fails, re-initialize audio and try once more; while playing, nobody else may re-initialize (see audio_io)
             with audio_io.call(sd.RawOutputStream, samplerate=self.SR, channels=self.CH,
                                dtype="int16") as stream, audio_io.in_use():
                 while not stop.is_set():
@@ -333,14 +333,14 @@ class Recorder:
                 wav.writeframes(chunk)
 
         try:
-            # 打开失败会重新初始化音频再试一次（见 audio_io）
+            # If opening fails, re-initialize audio and try once more (see audio_io)
             self._stream = audio_io.call(sd.RawInputStream, samplerate=self.SR, channels=1,
                                          dtype="int16", callback=callback)
         except Exception:
             wav.close()
             os.remove(path)
             raise
-        audio_io.busy_begin()  # 录音期间不让别处重新初始化音频
+        audio_io.busy_begin()  # While recording, nobody else may re-initialize audio
         self._wav, self._queue = wav, q
         self._writer = threading.Thread(target=write, daemon=True)
         self._writer.start()
@@ -353,7 +353,7 @@ class Recorder:
         try:
             self._stream.stop()
             self._stream.close()
-        except Exception:  # 麦克风中途没了：已经录到的照样保存
+        except Exception:  # The mic went away mid-recording: still save what was recorded
             audio_io.log.exception("停止录音时出错")
         finally:
             audio_io.busy_end()
@@ -398,7 +398,7 @@ class App:
 
         ui_style.apply(root)
         P = ui_style.PAD
-        BW = 11   # 每行最左边那个按钮的宽度，三行对齐
+        BW = 11   # Width of the left-most button in each row, so the three rows line up
 
         # --- top bar ---
         top = self.top = ttk.Frame(parent, padding=(P, P, P, P))
@@ -408,7 +408,7 @@ class App:
         self.ts_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(top, text="显示时间戳", variable=self.ts_var,
                         command=self.render).pack(side="left", padx=12)
-        # 识别模型只在 ⚙ 设置 里选（和精听字幕共用）；这里显示当前用的是哪个
+        # The recognition model is chosen only in ⚙ 设置 (shared with the subtitles); here we just show which one is in use
         self.model_label = ttk.Label(top, style="Hint.TLabel")
         self.model_label.pack(side="left")
         self.save_audio_btn = ttk.Button(top, text="保存音频…", command=self.save_audio)
@@ -430,7 +430,7 @@ class App:
         rec.pack(fill="x")
         self.rec_btn = ttk.Button(rec, text="● 录音", width=BW, command=self.toggle_record)
         self.rec_btn.pack(side="left")
-        # 时长：60 / 90 秒，或者「自定 N 分钟」；选过的会存进 settings.json
+        # Length: 60 / 90 s, or "自定 N 分钟" (custom N minutes); the choice is saved in settings.json
         choice = str(self.settings["rec_length"])
         choices = [str(n) for n in REC_LENGTHS] + ["custom"]
         self.rec_choice = tk.StringVar(value=choice if choice in choices else choices[0])
@@ -1059,6 +1059,6 @@ class App:
         """Drop zone shows the current file name, its folder, and a short state note."""
         path = self.current_file
         folder = os.path.dirname(os.path.abspath(path))
-        if len(folder) > 60:   # 太深的路径只留结尾，免得撑满拖放区
+        if len(folder) > 60:   # Keep only the end of a very deep path, so it doesn't fill the drop zone
             folder = "…" + folder[-59:]
         self.drop.config(text=f"{os.path.basename(path)}\n{folder}\n（{note}）")

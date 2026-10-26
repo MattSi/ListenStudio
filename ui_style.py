@@ -1,7 +1,7 @@
-"""转录页和精听页共用的界面风格：字体、颜色、ttk 控件样式、拖放区。
+"""Shared look for all tabs: fonts, colors, ttk widget styles, the drop zone.
 
-两边（无论单独运行还是在 app.py 里合在一起）都调用 apply(root)，
-拖放区都用 drop_zone() 创建，这样看起来是同一个程序。
+Every tab (whether run alone or together in app.py) calls apply(root) and creates its
+drop zone with drop_zone(), so they all look like one program.
 """
 import sys
 import tkinter as tk
@@ -13,19 +13,19 @@ elif sys.platform == "win32":
     FONT = "Microsoft YaHei UI"
 else:
     FONT = "Noto Sans CJK SC"
-TEXT_FONT = "Segoe UI" if sys.platform == "win32" else FONT  # 英文正文（转录文字、字幕）
+TEXT_FONT = "Segoe UI" if sys.platform == "win32" else FONT  # English body text (transcripts, subtitles)
 
-PAD = 10                 # 页面左右边距 / 行间距
-ACCENT = "#2a6fdb"       # 主色：时间戳、波形、当前句
-DROP_BG = "#eef3fb"      # 拖放区底色
-DROP_BORDER = "#b9cbe8"  # 拖放区边框
-MUTED = "#888888"        # 提示文字
-OK = "#22a06b"           # 状态（正常）
-REC = "#e02424"          # 录音红点
+PAD = 10                 # Page left/right margin / row spacing
+ACCENT = "#2a6fdb"       # Main color: timestamps, waveform, current sentence
+DROP_BG = "#eef3fb"      # Drop zone background
+DROP_BORDER = "#b9cbe8"  # Drop zone border
+MUTED = "#888888"        # Hint text
+OK = "#22a06b"           # Status (normal)
+REC = "#e02424"          # Recording red dot
 
 
 def apply(root):
-    """设置整个窗口的默认字体和 ttk 样式；重复调用没关系。"""
+    """Set the default font and ttk styles for the whole window; safe to call more than once."""
     root.option_add("*Font", (FONT, 10))
     st = ttk.Style(root)
     st.configure(".", font=(FONT, 10))
@@ -37,11 +37,11 @@ def apply(root):
 
 
 def drop_zone(parent, text, height=4):
-    """统一样式的拖放区（浅蓝底、细边框、手形光标）。"""
+    """A drop zone in the shared style (light blue background, thin border, hand cursor)."""
     lbl = tk.Label(parent, text=text, height=height, bg=DROP_BG, fg="#333",
                    font=(FONT, 12), cursor="hand2", bd=0, highlightthickness=1,
                    highlightbackground=DROP_BORDER, highlightcolor=DROP_BORDER,
                    justify="center")
-    # 文字太长（比如很深的文件夹路径）时自动换行，不撑出窗口
+    # Wrap long text (e.g. a deep folder path) instead of stretching the window
     lbl.bind("<Configure>", lambda e: lbl.config(wraplength=max(200, e.width - 40)))
     return lbl

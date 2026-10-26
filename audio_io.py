@@ -1,16 +1,21 @@
-"""声音输出 / 输入的"保险"，三个页面共用；外加一份错误日志。
+"""A safety layer for sound output / input, shared by all three tabs; plus an error log.
 
-为什么要有它：sounddevice 底下的 PortAudio 只在启动时扫描一次声卡。
-程序闲置一阵子之后（Mac 上尤其常见：蓝牙耳机 / AirPods 自动断开、显示器休眠、
-系统切换了默认输出），它手里的设备已经不存在了，这时再播放要么报错、要么直接卡住。
+Why it exists: PortAudio (under sounddevice) scans the sound devices only once, at start.
+After the program has been idle for a while (common on Mac: Bluetooth headphones / AirPods
+disconnect by themselves, the display sleeps, the system switches the default output),
+the device it holds no longer exists, and the next playback either fails or simply hangs.
 
-  call(fn, ...)  调用 sounddevice（sd.play、打开音频流……）：出错就重新初始化音频再试一次，
-                 第二次还失败才抛出 AudioError（带中文说明）。
-  prepare()      闲置超过 IDLE_REFRESH 秒后第一次用声音前，先主动重新初始化——
-                 对付"卡住"的情况（卡住是抓不到异常的，只能提前避开）。
-  in_use()       正在长时间播放 / 录音时套上它，这期间不会去重新初始化，免得把正在用的流掐断。
-  log            日志（listenstudio.log，放在设置文件旁边），install_tk_hook 让按钮回调里
-                 没被处理的错误也写进日志、并显示在状态行，而不是悄悄消失。
+  call(fn, ...)  Call sounddevice (sd.play, opening a stream, ...): on error, re-initialize
+                 audio and try once more; only if the second try also fails, raise
+                 AudioError (with a Chinese message for the status line).
+  prepare()      Before the first use of sound after more than IDLE_REFRESH seconds idle,
+                 re-initialize first. This is for the "hang" case: a hang can't be caught
+                 as an exception, so we can only avoid it in advance.
+  in_use()       Wrap long playback / recording in this; no re-initialization happens
+                 meanwhile, so a stream in use is not cut off.
+  log            The log (listenstudio.log, next to the settings file). install_tk_hook makes
+                 unhandled errors in button callbacks go to the log and the status line
+                 instead of disappearing silently.
 """
 import contextlib
 import logging
@@ -24,7 +29,7 @@ import sounddevice as sd
 
 import app_paths
 
-IDLE_REFRESH = 300  # 闲置超过 5 分钟，下次用声音前先重新初始化
+IDLE_REFRESH = 300  # Idle for more than 5 minutes: re-initialize before the next use of sound
 LOG_FILE = os.path.join(app_paths.data_dir(), "listenstudio.log")
 
 log = logging.getLogger("listenstudio")
@@ -36,7 +41,7 @@ if not log.handlers:
         h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         log.addHandler(h)
     except OSError:
-        log.addHandler(logging.NullHandler())  # 写不了日志也不影响用
+        log.addHandler(logging.NullHandler())  # If the log can't be written, everything still works
 
 
 class AudioError(RuntimeError):
@@ -46,7 +51,7 @@ class AudioError(RuntimeError):
 _lock = threading.RLock()
 _last_use = time.monotonic()
 _busy = 0
-_after_reinit = []  # 重新初始化后要做的事（例如把设置里选的扬声器 / 麦克风再设一遍）
+_after_reinit = []  # Things to do after re-initializing (e.g. set the chosen speaker / mic again)
 
 
 def on_reinit(fn):
@@ -54,7 +59,7 @@ def on_reinit(fn):
 
 
 def reinit(reason):
-    """关掉 PortAudio 再重新打开：重新扫描声卡，丢掉失效的设备句柄。"""
+    """Close PortAudio and open it again: rescans the sound devices and drops dead device handles."""
     with _lock:
         log.info("重新初始化音频：%s", reason)
         try:
@@ -76,7 +81,7 @@ def touch():
 
 
 def prepare():
-    """闲置太久了就先重新初始化；有流正在用时不动。"""
+    """Re-initialize first if idle for too long; do nothing while a stream is in use."""
     with _lock:
         idle = time.monotonic() - _last_use
         if idle > IDLE_REFRESH and _busy == 0:
@@ -85,7 +90,7 @@ def prepare():
 
 
 def call(fn, *args, **kwargs):
-    """调用 sounddevice：失败就重新初始化音频再试一次。"""
+    """Call sounddevice: if it fails, re-initialize audio and try once more."""
     with _lock:
         prepare()
         try:
@@ -117,7 +122,7 @@ def in_use():
 
 
 def busy_begin():
-    """录音这种开始 / 结束不在同一个函数里的，用这一对代替 in_use()。"""
+    """For things like recording, where start and end are in different functions, use this pair instead of in_use()."""
     global _busy
     with _lock:
         _busy += 1
@@ -131,8 +136,8 @@ def busy_end():
 
 
 def install_tk_hook(root, show):
-    """Tk 回调（按钮、快捷键、定时器）里没被处理的错误：写进日志，再用 show(文字) 显示出来。
-    打包的 .app 没有终端，不这样做的话错误会悄悄消失，看起来就是"点了没反应"。"""
+    """Errors not handled in Tk callbacks (buttons, shortcuts, timers): write them to the log, then show them with show(text).
+    The packaged .app has no terminal; without this, errors disappear silently and it looks like "clicking does nothing"."""
     def report(exc, val, tb):
         log.error("界面回调出错：\n%s", "".join(traceback.format_exception(exc, val, tb)))
         try:
