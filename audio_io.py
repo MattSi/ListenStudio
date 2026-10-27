@@ -28,6 +28,7 @@ import traceback
 import sounddevice as sd
 
 import app_paths
+from i18n import tr
 
 IDLE_REFRESH = 300  # Idle for more than 5 minutes: re-initialize before the next use of sound
 LOG_FILE = os.path.join(app_paths.data_dir(), "listenstudio.log")
@@ -61,7 +62,7 @@ def on_reinit(fn):
 def reinit(reason):
     """Close PortAudio and open it again: rescans the sound devices and drops dead device handles."""
     with _lock:
-        log.info("重新初始化音频：%s", reason)
+        log.info("Re-initializing audio: %s", reason)
         try:
             sd.stop()
         except Exception:
@@ -72,7 +73,7 @@ def reinit(reason):
             try:
                 fn()
             except Exception:
-                log.exception("重新初始化后恢复设备设置失败")
+                log.exception("Failed to restore device settings after re-initializing")
 
 
 def touch():
@@ -85,7 +86,7 @@ def prepare():
     with _lock:
         idle = time.monotonic() - _last_use
         if idle > IDLE_REFRESH and _busy == 0:
-            reinit(f"闲置了 {idle / 60:.0f} 分钟")
+            reinit(f"idle for {idle / 60:.0f} min")
         touch()
 
 
@@ -96,14 +97,14 @@ def call(fn, *args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except Exception as first:
-            log.warning("音频调用 %s 失败：%r，重新初始化后再试一次",
+            log.warning("Audio call %s failed: %r; re-initializing and trying again",
                         getattr(fn, "__name__", fn), first)
-            reinit(f"{getattr(fn, '__name__', fn)} 出错")
+            reinit(f"{getattr(fn, '__name__', fn)} failed")
             try:
                 return fn(*args, **kwargs)
             except Exception as second:
-                log.error("重试仍然失败：%r", second)
-                raise AudioError(f"声音设备出错（已自动重试一次）：{second}") from second
+                log.error("Retry failed too: %r", second)
+                raise AudioError(tr("声音设备出错（已自动重试一次）：{e}", e=second)) from second
         finally:
             touch()
 
@@ -139,9 +140,9 @@ def install_tk_hook(root, show):
     """Errors not handled in Tk callbacks (buttons, shortcuts, timers): write them to the log, then show them with show(text).
     The packaged .app has no terminal; without this, errors disappear silently and it looks like "clicking does nothing"."""
     def report(exc, val, tb):
-        log.error("界面回调出错：\n%s", "".join(traceback.format_exception(exc, val, tb)))
+        log.error("Error in a UI callback:\n%s", "".join(traceback.format_exception(exc, val, tb)))
         try:
-            show(f"出错了：{val}（详情见日志 {LOG_FILE}）")
+            show(tr("出错了：{err}（详情见日志 {log}）", err=val, log=LOG_FILE))
         except Exception:
             pass
     root.report_callback_exception = report

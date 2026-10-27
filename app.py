@@ -31,6 +31,8 @@ Dependencies: pip install tkinterdnd2 sounddevice av numpy pillow
 """
 import argparse
 import os
+import subprocess
+import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -40,9 +42,10 @@ import audio_io
 import intensive_listening
 import reader
 import ui_style
+from i18n import tr
 import transcriber
 
-TITLE = "听写 & 精听"
+TITLE = tr("听写 & 精听")
 
 
 class Tooltip:
@@ -88,9 +91,9 @@ class CombinedApp:
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True)
         self.tx_tab, self.jt_tab, self.rd_tab = (tk.Frame(self.nb) for _ in range(3))
-        self.nb.add(self.tx_tab, text="  转录 / 录音  ")
-        self.nb.add(self.jt_tab, text="  精听  ")
-        self.nb.add(self.rd_tab, text="  朗读  ")
+        self.nb.add(self.tx_tab, text=tr("  转录 / 录音  "))
+        self.nb.add(self.jt_tab, text=tr("  精听  "))
+        self.nb.add(self.rd_tab, text=tr("  朗读  "))
 
         # Both tabs share one settings dict (settings.json): the recognition model is chosen in "⚙ 设置", the recording length on the transcribe tab
         opts = intensive_listening.load_settings()
@@ -98,28 +101,29 @@ class CombinedApp:
         self.tx = transcriber.App(root, parent=self.tx_tab, settings=opts)
         self.jt = intensive_listening.Player(root, opts, parent=self.jt_tab)
         self.jt.active = False  # The transcribe tab is shown first
+        self.jt.restart = self.restart  # Settings can restart the program to switch language
         self.rd = reader.Reader(root, self.rd_tab, opts,
                                 mic_busy=lambda: self.tx.recorder.active)
 
         # The transcribe tab can open the settings too (same window; mic / speaker are chosen there)
-        ttk.Button(self.tx.top, text="⚙ 设置", command=self.jt.open_settings).pack(
+        ttk.Button(self.tx.top, text=tr("⚙ 设置"), command=self.jt.open_settings).pack(
             side="right", padx=(4, 0), before=self.tx.save_audio_btn)
 
         # Buttons that send the file to the other tab (greyed out when there is no file)
-        self.to_jt_btn = ttk.Button(self.tx.top, text="送去精听 ▸",
+        self.to_jt_btn = ttk.Button(self.tx.top, text=tr("送去精听 ▸"),
                                     command=self.send_to_listening)
         self.to_jt_btn.pack(side="right", padx=(0, 4))
-        Tooltip(self.to_jt_btn, "把当前音频（拖入的文件或刚录的音）\n送到「精听」页，逐句播放、自动暂停")
-        self.to_tx_btn = ttk.Button(self.jt.top, text="◂ 送去转录", takefocus=False,
+        Tooltip(self.to_jt_btn, tr("把当前音频（拖入的文件或刚录的音）\n送到「精听」页，逐句播放、自动暂停"))
+        self.to_tx_btn = ttk.Button(self.jt.top, text=tr("◂ 送去转录"), takefocus=False,
                                     command=self.send_to_transcribe)
         self.to_tx_btn.pack(side="right", padx=(0, 12))
-        Tooltip(self.to_tx_btn, "把精听页当前的文件送到「转录 / 录音」页，\n用 Whisper 转成带时间戳的文字")
+        Tooltip(self.to_tx_btn, tr("把精听页当前的文件送到「转录 / 录音」页，\n用 Whisper 转成带时间戳的文字"))
 
         self.nb.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         root.protocol("WM_DELETE_WINDOW", self.quit)
         # Errors not handled in buttons / shortcuts / timers: write them to the log and show them in the current tab's status line
         audio_io.install_tk_hook(root, self.show_error)
-        audio_io.log.info("启动 %s", TITLE)
+        audio_io.log.info("Started %s", TITLE)
         self.update_send_buttons()
 
     def show_error(self, msg):
@@ -150,7 +154,7 @@ class CombinedApp:
             self.tx.player.pause()
         if not self.jt.active and (self.jt.playing or self.jt.pending or self.jt.auto_job):
             self.jt.stop_all()
-            self.jt.refresh("已停止")
+            self.jt.refresh(tr("已停止"))
         if not self.rd.active:
             self.rd.shutdown()   # Stop playback; if "my reading" is being recorded, stop and save it
         if self.jt.active:
@@ -160,10 +164,10 @@ class CombinedApp:
     def send_to_listening(self):
         path = self.tx.current_file
         if not path:
-            self.tx.status.set("先拖入或录一段音频，再送去精听。")
+            self.tx.status.set(tr("先拖入或录一段音频，再送去精听。"))
             return
         if self.tx.recorder.active:
-            self.tx.status.set("正在录音 - 录完再送去精听。")
+            self.tx.status.set(tr("正在录音 - 录完再送去精听。"))
             return
         self.nb.select(self.jt_tab)
         self.jt.open_file(path)
@@ -173,11 +177,11 @@ class CombinedApp:
         if not path:
             return
         if self.tx._busy or self.tx.recorder.active:
-            messagebox.showinfo(TITLE, "转录页正在转录或录音，等它结束再送过去。")
+            messagebox.showinfo(TITLE, tr("转录页正在转录或录音，等它结束再送过去。"))
             return
         self.nb.select(self.tx_tab)
         self.tx.select(path)
-        self.tx.status.set(f"从精听送来：{os.path.basename(path)} - 点 Start 开始转录")
+        self.tx.status.set(tr("从精听送来：{name} - 点 Start 开始转录", name=os.path.basename(path)))
 
     def quit(self):
         self.tx.shutdown()   # Stop playback; a half-finished recording is saved too
@@ -185,22 +189,30 @@ class CombinedApp:
         self.rd.shutdown()   # Same as above, and save the draft on the 朗读 (Read aloud) tab
         self.root.destroy()
 
+    def restart(self):
+        """Start a new copy of the program, then quit this one (used after changing the UI language).
+        The packaged app is its own executable; a script is run again with the same Python."""
+        args = [sys.executable] if getattr(sys, "frozen", False) else \
+            [sys.executable, os.path.abspath(sys.argv[0])]
+        self.quit()
+        subprocess.Popen(args, cwd=os.getcwd())
+
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="听写 & 精听：Whisper 转录 / 录音 + 自动断句精听")
+    p = argparse.ArgumentParser(description=tr("听写 & 精听：Whisper 转录 / 录音 + 自动断句精听"))
     p.add_argument("file", nargs="?",
-                   help="音频或视频文件（m4a / mp3 / wav / mp4 等）；不填就打开窗口拖文件进去")
+                   help=tr("音频或视频文件（m4a / mp3 / wav / mp4 等）；不填就打开窗口拖文件进去"))
     # Sentence-split options are normally changed in the window's Settings; options given on the command line only apply to this run
     S = argparse.SUPPRESS
     p.add_argument("--threshold", type=float, default=S,
-                   help="静音阈值 dB（相对峰值）。默认按本底噪声自动定；"
-                        "手动指定时，呼吸声被当成说话就调高（如 -25），吞字就调低（如 -40）")
+                   help=tr("静音阈值 dB（相对峰值）。默认按本底噪声自动定；"
+                        "手动指定时，呼吸声被当成说话就调高（如 -25），吞字就调低（如 -40）"))
     p.add_argument("--max-len", type=float, default=S,
-                   help="超过这么长（秒）的句子在句内最长的停顿处再切，默认 6；0 = 不再切")
+                   help=tr("超过这么长（秒）的句子在句内最长的停顿处再切，默认 6；0 = 不再切"))
     p.add_argument("--min-silence", type=float, default=S,
-                   help="多长的静音算断句（秒），默认 0.35；调小断得更细")
+                   help=tr("多长的静音算断句（秒），默认 0.35；调小断得更细"))
     p.add_argument("--pad", type=float, default=S,
-                   help="每句前后多留的时间（秒），防止吞音，默认 0.15")
+                   help=tr("每句前后多留的时间（秒），防止吞音，默认 0.15"))
     args = vars(p.parse_args(argv))
     return args.pop("file"), args
 

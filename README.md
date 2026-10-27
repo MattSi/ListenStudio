@@ -82,26 +82,3 @@ The `.app` does not bundle Whisper (PyTorch is over 1 GB). For transcription it 
 | `ui_style.py` | Shared fonts and colours |
 | `build_mac.sh`, `.github/workflows/build-mac.yml` | macOS packaging with PyInstaller, and the CI job that runs it |
 
-## How I built this with Claude Code
-
-I built ListenStudio in about a week (October 18–25, 2026) with [Claude Code](https://claude.com/claude-code) as a pair programmer. About 4,200 lines of Python went in over 17 commits and 4 merged pull requests.
-
-**How we split the work.** I decided what to build and how it should behave: which features help a learner, how each screen should work, and what "done" looks like. Claude Code wrote most of the code from those descriptions. I tested every change in the app and reviewed the diff before merging.
-
-**Workflow.** After the first prototype, each feature went on its own branch and was merged through a pull request:
-
-| PR | Feature |
-|---|---|
-| #1 | Auto-play the next sentence after N seconds |
-| #2 | One shared Whisper model for all tabs, loaded once, with a lock so two tabs take turns |
-| #3 | The Read-aloud tab: TTS, recording, pronunciation check, sentence-by-sentence comparison |
-| #4 | Highlight the current sentence in the listening overview |
-
-Each commit message explains what changed and why, so the history can be read as a changelog.
-
-**Where human review mattered.**
-- *A bug in generated code.* While adding the comparison controls, part of a `refresh()` method ended up inside another function, after an early `return`. In the app this showed up as a blank button and an error when the offline voice wasn't downloaded. Testing caught it, and the fix commit records the cause, not just the symptom.
-- *Design choices.* Some decisions came from using the app, not from the code: decoding everything with PyAV so users don't need ffmpeg; writing recordings to disk as they happen so long recordings don't fill memory; sharing one Whisper model between tabs instead of loading it twice; turning off macOS App Nap so timers keep working when the window is in the background.
-- *Edge cases.* Short sentences, the first and last sentence in the waveform overview, a non-number typed in a number box, running offline. I asked for each to be handled and checked it.
-
-**What I learned.** Claude Code is fastest when the request is specific and has one goal: "add a progress bar and previous / replay / next buttons to the comparison row" works better than "improve the comparison". The developer's job moves towards writing clear requirements, reviewing diffs and testing behaviour, and that is where the bugs get caught.

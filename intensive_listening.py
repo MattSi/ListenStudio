@@ -45,6 +45,8 @@ from tkinter import filedialog, messagebox, ttk
 import app_paths
 import audio_io
 import ui_style
+import i18n
+from i18n import tr
 
 import av
 import numpy as np
@@ -59,8 +61,8 @@ except ImportError:  # Without tkinterdnd2, fall back to choosing files with the
 AUDIO_EXTS = (".m4a", ".mp3", ".wav", ".flac", ".aac", ".ogg", ".opus", ".wma",
               ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".flv", ".wmv",
               ".ts", ".mpg", ".mpeg", ".3gp")
-DROP_HINT = ("把音频或视频文件拖到这里（或点这里选择），自动断句后逐句精听" if TkinterDnD
-             else "点击这里选择音频或视频文件")
+DROP_HINT = (tr("把音频或视频文件拖到这里（或点这里选择），自动断句后逐句精听") if TkinterDnD
+             else tr("点击这里选择音频或视频文件"))
 UI_FONT = ui_style.FONT
 
 # ---------- Settings (settings.json, location: see app_paths.py) ----------
@@ -72,6 +74,7 @@ DEFAULTS = {
     "pad": 0.15,          # Extra time kept before and after each sentence (seconds)
     "volume": 2.0,        # Volume multiplier; above 1 a limiter stops clipping
     "speed": 1.0,         # Playback speed (changes speed without changing pitch)
+    "language": "en",     # UI language: "en" / "zh" (see i18n.py; takes effect after restart)
     "subtitles": "off",   # Subtitles: off / always (always shown) / after (shown after the sentence has played)
     "whisper_model": "small.en",
     "mic": None,          # Mic / speaker names; None = follow the system default
@@ -87,9 +90,9 @@ DEFAULTS = {
     "cmp_auto": True,     # 朗读 tab, compare by sentence: go on to the next sentence automatically
 }
 AUTO_DELAY_RANGE = (0.0, 30.0)
-SYSTEM_DEVICE = "跟随系统默认"
-SUB_MODES = {"off": "关闭", "always": "一直显示", "after": "听完一句再显示",
-             "manual": "手动显示"}  # manual: every sentence starts hidden; shown only with the button / T
+SYSTEM_DEVICE = tr("跟随系统默认")
+SUB_MODES = {"off": tr("关闭"), "always": tr("一直显示"), "after": tr("听完一句再显示"),
+             "manual": tr("手动显示")}  # manual: every sentence starts hidden; shown only with the button / T
 # Recognition model: the transcribe tab and the subtitles share one (whisper_model in settings.json),
 # and also share the loaded models in _whisper_models, so each model is loaded only once
 WHISPER_MODELS = ["tiny.en", "base.en", "small.en", "medium.en", "turbo", "large-v3"]
@@ -112,7 +115,7 @@ def save_settings(s):
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(s, f, ensure_ascii=False, indent=2)
     except OSError as ex:
-        messagebox.showwarning("设置", f"设置没能保存：\n{ex}")
+        messagebox.showwarning(tr("设置"), tr("设置没能保存：\n{ex}", ex=ex))
 
 
 def audio_devices(kind):
@@ -479,14 +482,14 @@ def find_external_python():
 def _transcribe_external(audio16k, model_name):
     py = find_external_python()
     if not py:
-        raise ImportError(f"要显示字幕需要先安装 Whisper：在终端运行 {INSTALL_HINT}")
+        raise ImportError(tr("要显示字幕需要先安装 Whisper：在终端运行 {cmd}", cmd=INSTALL_HINT))
     with tempfile.TemporaryDirectory() as d:
         audio_path, out_path = os.path.join(d, "audio.npy"), os.path.join(d, "words.json")
         np.save(audio_path, audio16k.astype(np.float32))
         r = subprocess.run([py, "-c", WHISPER_HELPER, audio_path, model_name, out_path],
                            capture_output=True, text=True, creationflags=NO_WINDOW)
         if r.returncode != 0:
-            last = (r.stderr.strip().splitlines() or ["未知错误"])[-1]
+            last = (r.stderr.strip().splitlines() or [tr("未知错误")])[-1]
             raise RuntimeError(f"{os.path.basename(py)}: {last}")
         with open(out_path, encoding="utf-8") as f:
             return [tuple(w) for w in json.load(f)]
@@ -595,7 +598,7 @@ class Player:
         self.pending = None  # Wait until the picture is ready before starting the sound: (sentence no., deadline)
 
         if not self.embedded:
-            root.title("精听")
+            root.title(tr("精听"))
             root.geometry("760x560")
 
         ui_style.apply(root)
@@ -607,13 +610,13 @@ class Player:
         # --- Toolbar (same layout as the transcribe tab: open file on the left, volume / settings on the right) ---
         top = self.top = ttk.Frame(parent, padding=(P, P, P, P))
         top.pack(fill="x")
-        ttk.Button(top, text="打开文件…", takefocus=False,
+        ttk.Button(top, text=tr("打开文件…"), takefocus=False,
                    command=self.browse).pack(side="left")
-        ttk.Button(top, text="⚙ 设置", takefocus=False,
+        ttk.Button(top, text=tr("⚙ 设置"), takefocus=False,
                    command=self.open_settings).pack(side="right")
         vol = ttk.Frame(top)
         vol.pack(side="right", padx=(0, 12))
-        self.vol_label = ttk.Label(vol, width=10, anchor="e")
+        self.vol_label = ttk.Label(vol, width=12, anchor="e")
         self.vol_label.pack(side="left", padx=(0, 6))
         self.vol_var = tk.DoubleVar(value=round(opts["volume"] * 100))
         self.vol_scale = ttk.Scale(vol, from_=50, to=250, orient="horizontal", length=140,
@@ -626,7 +629,7 @@ class Player:
         # Playback speed: changes speed without changing pitch; also [ and ] keys, and the mouse wheel over the box
         spd = ttk.Frame(top)
         spd.pack(side="right", padx=(0, 16))
-        ttk.Label(spd, text="速度").pack(side="left", padx=(0, 6))
+        ttk.Label(spd, text=tr("速度")).pack(side="left", padx=(0, 6))
         self.speed_var = tk.StringVar()
         self.speed_box = ttk.Combobox(spd, textvariable=self.speed_var, state="readonly",
                                       values=[speed_label(v) for v in SPEEDS], width=6,
@@ -646,6 +649,7 @@ class Player:
         self.drop.pack(fill="x", padx=P)
         self.name, self.thr = "", None
         self.settings_win = None
+        self.restart = None  # Set by app.py: restart the program (used when the UI language changes)
         self.drop.bind("<Button-1>", lambda e: self.browse())
         if TkinterDnD:
             for w in (self.drop, parent):
@@ -659,10 +663,10 @@ class Player:
         self.status = tk.Label(parent, font=(UI_FONT, 11), fg=ui_style.OK)
         self.status.pack(pady=(6, 0))
         tk.Label(parent, fg=ui_style.MUTED, font=(UI_FONT, 9),
-                 text="空格 下一句 / 停止    R 重听    ← → 上下句    T 显示/隐藏字幕    + - 音量    [ ] 速度"
-                 + ("" if self.embedded else "    Q 退出") + "\n"
+                 text=tr("空格 下一句 / 停止    R 重听    ← → 上下句    T 显示/隐藏字幕    + - 音量    [ ] 速度")
+                 + ("" if self.embedded else tr("    Q 退出")) + tr("\n"
                  "鼠标：点波形/画面重听，点总览跳到那一句；"
-                 "在波形/画面上滚轮 = 上下句，在音量上滚轮 = 调音量"
+                 "在波形/画面上滚轮 = 上下句，在音量上滚轮 = 调音量")
                  ).pack(side="bottom", pady=(4, P))
 
         # --- Subtitles (only shown when turned on in settings) ---
@@ -678,8 +682,8 @@ class Player:
         self.sub.bind("<Configure>", lambda e: self.fit_sub_height())
         self.sub_text = ""
         menu = tk.Menu(root, tearoff=False)
-        menu.add_command(label="复制", command=self.copy_selection)
-        menu.add_command(label="复制整句", command=lambda: self.copy_text(self.sub_text))
+        menu.add_command(label=tr("复制"), command=self.copy_selection)
+        menu.add_command(label=tr("复制整句"), command=lambda: self.copy_text(self.sub_text))
         rclick = "<Button-2>" if sys.platform == "darwin" else "<Button-3>"
         self.sub.bind(rclick, lambda e: menu.tk_popup(e.x_root, e.y_root))
         self.sub.bind("<Control-a>", lambda e: (self.sub.tag_add("sel", "1.0", "end-1c"), "break")[1])
@@ -695,11 +699,11 @@ class Player:
         bar.pack(pady=(2, 6))
         self.buttons = {}
         for key, text, cmd, width in (
-                ("prev", "⏮ 上一句", self.prev, 9),
-                ("replay", "↻ 重听", lambda: self.play(self.cur), 8),
-                ("main", "▶ 播放", self.on_space, 10),
-                ("next", "下一句 ⏭", self.next, 9),
-                ("sub", "显示字幕", self.toggle_sub, 9)):
+                ("prev", tr("⏮ 上一句"), self.prev, 9),
+                ("replay", tr("↻ 重听"), lambda: self.play(self.cur), 8),
+                ("main", tr("▶ 播放"), self.on_space, 10),
+                ("next", tr("下一句 ⏭"), self.next, 9),
+                ("sub", tr("显示字幕"), self.toggle_sub, 9)):
             # takefocus=False: buttons don't take keyboard focus, otherwise Space would also "press" the button
             b = ttk.Button(bar, text=text, width=width, command=cmd, style="Big.TButton",
                            takefocus=False, cursor="hand2")
@@ -724,14 +728,14 @@ class Player:
         auto = ttk.Frame(bar)
         auto.pack(side="left", padx=(12, 0))
         self.auto_var = tk.BooleanVar(value=opts["auto_next"])
-        ttk.Checkbutton(auto, text="自动下一句", variable=self.auto_var, takefocus=False,
+        ttk.Checkbutton(auto, text=tr("自动下一句"), variable=self.auto_var, takefocus=False,
                         command=self.on_auto_change).pack(side="left")
         self.delay_var = tk.StringVar(value=f"{opts['auto_delay']:g}")
         lo, hi = AUTO_DELAY_RANGE
         self.delay_spin = ttk.Spinbox(auto, from_=lo, to=hi, increment=0.5, width=4,
                                       textvariable=self.delay_var, command=self.on_auto_change)
         self.delay_spin.pack(side="left", padx=(4, 2))
-        ttk.Label(auto, text="秒后").pack(side="left")
+        ttk.Label(auto, text=tr("秒后")).pack(side="left")
         self.delay_spin.bind("<Return>", lambda e: self.on_auto_change(give_back_focus=True))
         self.delay_spin.bind("<FocusOut>", lambda e: self.on_auto_change())
 
@@ -783,7 +787,7 @@ class Player:
                 self.bind_key(k, self.quit)
             root.protocol("WM_DELETE_WINDOW", self.quit)
 
-        self.status.config(text="拖入音频文件开始")
+        self.status.config(text=tr("拖入音频文件开始"))
         self.update_buttons()
         self.poll()
 
@@ -806,8 +810,8 @@ class Player:
 
     def browse(self):
         path = filedialog.askopenfilename(
-            filetypes=[("音频/视频", " ".join("*" + e for e in AUDIO_EXTS)),
-                       ("所有文件", "*.*")])
+            filetypes=[(tr("音频/视频"), " ".join("*" + e for e in AUDIO_EXTS)),
+                       (tr("所有文件"), "*.*")])
         if path:
             self.open_file(path)
 
@@ -815,13 +819,13 @@ class Player:
         if self.loading:
             return
         if not os.path.isfile(path):
-            messagebox.showerror("错误", f"不是文件：\n{path}")
+            messagebox.showerror(tr("错误"), tr("不是文件：\n{path}", path=path))
             return
         self.stop_all()
         self.loading = True
         name = os.path.basename(path)
-        self.drop.config(text=f"{name}\n正在读取并断句……")
-        self.status.config(text="读取中，请稍候")
+        self.drop.config(text=tr("{name}\n正在读取并断句……", name=name))
+        self.status.config(text=tr("读取中，请稍候"))
         threading.Thread(target=self._load, args=(path,), daemon=True).start()
 
     def _load(self, path):
@@ -829,21 +833,21 @@ class Player:
             audio, sr = load_audio(path)
             segs, thr = self.split(audio, sr)
             env = make_envelope(audio, sr)
-            err = None if segs else "没有检测到句子，试试在设置里调低静音阈值"
+            err = None if segs else tr("没有检测到句子，试试在设置里调低静音阈值")
             try:
                 video = VideoDecoder(path) if has_video(path) else None
             except Exception:  # If the picture can't be read, treat it as audio only
                 video = None
         except Exception as ex:  # Decoding failed, etc.
             audio = sr = segs = env = thr = video = None
-            err = f"无法读取：{ex}"
+            err = tr("无法读取：{ex}", ex=ex)
         self.root.after(0, self._loaded, path, audio, sr, segs, err, env, thr, video)
 
     def _loaded(self, path, audio, sr, segs, err, env=None, thr=None, video=None):
         self.loading = False
         name = os.path.basename(path)
         if err:
-            self.drop.config(text=f"{name}\n（{err}）\n可以再拖一个文件进来")
+            self.drop.config(text=tr("{name}\n（{err}）\n可以再拖一个文件进来", name=name, err=err))
             self.status.config(text="")
             return
         self.audio, self.sr, self.segs = audio, sr, segs
@@ -855,11 +859,11 @@ class Player:
         self.words, self.words_key, self.texts = None, None, []
         self.revealed = False
         if not self.embedded:
-            self.root.title(f"精听 - {name}")
+            self.root.title(tr("精听 - {name}", name=name))
         self.set_video(video)
         self.show_file_info()
         self.start_subs()
-        self.refresh("按空格开始")
+        self.refresh(tr("按空格开始"))
         self.preview()
 
     # ---------- Subtitles ----------
@@ -881,7 +885,7 @@ class Player:
             except ImportError as ex:
                 words, err = None, str(ex)
             except Exception as ex:
-                words, err = None, f"字幕识别失败：{ex}"
+                words, err = None, tr("字幕识别失败：{ex}", ex=ex)
             self.root.after(0, self._subs_done, gen, path, model, words, err)
 
         threading.Thread(target=work, daemon=True).start()
@@ -929,15 +933,15 @@ class Player:
         elif self.sub_error:
             text, color = self.sub_error, "#c33"
         elif self.words is None:
-            text, color = f"字幕识别中……（{self.opts['whisper_model']}，第一次会慢一些）", "#888"
+            text, color = tr("字幕识别中……（{model}，第一次会慢一些）", model=self.opts['whisper_model']), "#888"
         elif mode == "after" and not self.revealed:
-            text, color = "（听完这句显示字幕，按 T 立即显示）", "#aaa"
+            text, color = tr("（听完这句显示字幕，按 T 立即显示）"), "#aaa"
         elif mode == "manual" and not self.revealed:
-            text, color = "（字幕已隐藏，点“显示字幕”或按 T）", "#aaa"
+            text, color = tr("（字幕已隐藏，点“显示字幕”或按 T）"), "#aaa"
         elif mode == "always" and self.hidden:
-            text, color = "（字幕已隐藏，按 T 显示）", "#aaa"
+            text, color = tr("（字幕已隐藏，按 T 显示）"), "#aaa"
         else:
-            text, color = self.texts[self.cur] or "（这句没识别出文字）", "#222"
+            text, color = self.texts[self.cur] or tr("（这句没识别出文字）"), "#222"
         # Only a real subtitle is used for "复制整句" (copy whole sentence); hint text is not
         self.sub_text = self.texts[self.cur] if color == "#222" and self.texts else ""
         self.set_sub(text, color)
@@ -1000,10 +1004,9 @@ class Player:
                                pad=o["pad"], max_len=o["max_len"])
 
     def show_file_info(self):
-        how = "自动" if self.opts["threshold"] is None else "手动"
-        thr_txt = f"，静音阈值 {self.thr:.0f} dB（{how}）" if self.thr is not None else ""
-        self.drop.config(text=f"{self.name}\n共 {len(self.segs)} 句{thr_txt}"
-                              "（拖入其他文件可替换）")
+        how = tr("自动") if self.opts["threshold"] is None else tr("手动")
+        thr_txt = tr("，静音阈值 {thr:.0f} dB（{how}）", thr=self.thr, how=how) if self.thr is not None else ""
+        self.drop.config(text=tr("{name}\n共 {n} 句{thr}（拖入其他文件可替换）", name=self.name, n=len(self.segs), thr=thr_txt))
 
     def resplit(self):
         """After the settings change, split again with the new options; try to stay where you were listening."""
@@ -1011,7 +1014,7 @@ class Player:
             return
         segs, thr = self.split(self.audio, self.sr)
         if not segs:
-            messagebox.showwarning("设置", "用这组参数没有检测到句子，试试调低静音阈值")
+            messagebox.showwarning(tr("设置"), tr("用这组参数没有检测到句子，试试调低静音阈值"))
             return
         self.stop_all()
         pos = self.segs[self.cur][0]
@@ -1021,7 +1024,7 @@ class Player:
         if self.words is not None:  # No need to recognize the subtitles again; just reassign them to the new sentences
             self.texts = sentence_texts(self.words, segs, self.sr)
         self.show_file_info()
-        self.refresh("已按新设置重新断句")
+        self.refresh(tr("已按新设置重新断句"))
         self.preview()
 
     # ---------- Settings window ----------
@@ -1031,7 +1034,7 @@ class Player:
             return
         o = self.opts
         win = self.settings_win = tk.Toplevel(self.root)
-        win.title("设置")
+        win.title(tr("设置"))
         win.resizable(False, False)
         win.transient(self.root)
         win.configure(bg=ttk.Style(win).lookup("TFrame", "background") or win.cget("bg"))
@@ -1045,16 +1048,26 @@ class Player:
             "pad": tk.DoubleVar(value=o["pad"]),
         }
         rows = [  # (key, title, min, max, step, explanation)
-            ("threshold", "静音阈值 (dB)", -60, -5, 1,
-             "呼吸声被当成说话 → 调高（如 -25）；吞字 → 调低（如 -40）"),
-            ("min_silence", "断句静音 (秒)", 0.1, 1.5, 0.05,
-             "多长的静音算一句结束；调小断得更细"),
-            ("max_len", "最长一句 (秒)", 0, 30, 0.5,
-             "超过就在句内最长停顿处再切；0 = 不再切"),
-            ("pad", "前后留白 (秒)", 0, 0.5, 0.05,
-             "每句前后多播一点，防止吞音"),
+            ("threshold", tr("静音阈值 (dB)"), -60, -5, 1,
+             tr("呼吸声被当成说话 → 调高（如 -25）；吞字 → 调低（如 -40）")),
+            ("min_silence", tr("断句静音 (秒)"), 0.1, 1.5, 0.05,
+             tr("多长的静音算一句结束；调小断得更细")),
+            ("max_len", tr("最长一句 (秒)"), 0, 30, 0.5,
+             tr("超过就在句内最长停顿处再切；0 = 不再切")),
+            ("pad", tr("前后留白 (秒)"), 0, 0.5, 0.05,
+             tr("每句前后多播一点，防止吞音")),
         ]
-        frm = ttk.Frame(win, padding=(16, 12, 16, 4))
+        # --- UI language (label in both languages so it can always be found) ---
+        lang_frm = ttk.Frame(win, padding=(16, 12, 16, 0))
+        lang_frm.pack(fill="x")
+        lang_of = {v: k for k, v in i18n.LANGUAGES.items()}
+        lang_var = tk.StringVar(value=i18n.LANGUAGES.get(o["language"], i18n.LANGUAGES["en"]))
+        ttk.Label(lang_frm, text=tr("语言 / Language")).pack(side="left", padx=(0, 10))
+        ttk.Combobox(lang_frm, textvariable=lang_var, values=list(i18n.LANGUAGES.values()),
+                     state="readonly", width=10).pack(side="left")
+        ttk.Label(lang_frm, text=tr("（重启后生效）"), style="Hint.TLabel").pack(side="left", padx=8)
+
+        frm = ttk.Frame(win, padding=(16, 4, 16, 4))
         frm.pack(fill="both")
         spins = {}
         r = 0
@@ -1065,7 +1078,7 @@ class Player:
             sp.grid(row=r, column=1, sticky="w", pady=(6, 0))
             spins[key] = sp
             if key == "threshold":
-                ttk.Checkbutton(frm, text="按本底噪声自动", variable=auto,
+                ttk.Checkbutton(frm, text=tr("按本底噪声自动"), variable=auto,
                                 command=lambda: sync_auto()).grid(row=r, column=2, sticky="w",
                                                                   padx=(10, 0))
             ttk.Label(frm, text=hint, style="Hint.TLabel").grid(
@@ -1078,17 +1091,17 @@ class Player:
         key_of = {v: k for k, v in label_of.items()}
         sub_mode = tk.StringVar(value=label_of.get(o["subtitles"], label_of["off"]))
         sub_model = tk.StringVar(value=o["whisper_model"])
-        ttk.Label(frm, text="字幕").grid(row=r + 1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(frm, text=tr("字幕")).grid(row=r + 1, column=0, sticky="w", pady=(6, 0))
         om = ttk.Combobox(frm, textvariable=sub_mode, values=list(label_of.values()),
                           state="readonly", width=14)
         om.grid(row=r + 1, column=1, columnspan=2, sticky="w", pady=(6, 0))
-        ttk.Label(frm, text="识别模型").grid(row=r + 2, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(frm, text=tr("识别模型")).grid(row=r + 2, column=0, sticky="w", pady=(6, 0))
         om = ttk.Combobox(frm, textvariable=sub_model, values=WHISPER_MODELS,
                           state="readonly", width=14)
         om.grid(row=r + 2, column=1, columnspan=2, sticky="w", pady=(6, 0))
         ttk.Label(frm, style="Hint.TLabel", justify="left",
-                 text="转录页和精听字幕共用这个模型；字幕每个文件只识别一次（结果会缓存）\n"
-                      "模型越大越准越慢：tiny / base 快，small 平衡，medium / large 准").grid(
+                 text=tr("转录页和精听字幕共用这个模型；字幕每个文件只识别一次（结果会缓存）\n"
+                      "模型越大越准越慢：tiny / base 快，small 平衡，medium / large 准")).grid(
             row=r + 3, column=0, columnspan=3, sticky="w")
 
         # --- Audio devices ---
@@ -1096,16 +1109,16 @@ class Player:
         mic = tk.StringVar(value=o["mic"] or SYSTEM_DEVICE)
         speaker = tk.StringVar(value=o["speaker"] or SYSTEM_DEVICE)
         dev_boxes = {}
-        for i, (kind, label, var) in enumerate((("input", "麦克风", mic),
-                                                ("output", "扬声器", speaker))):
+        for i, (kind, label, var) in enumerate((("input", tr("麦克风"), mic),
+                                                ("output", tr("扬声器"), speaker))):
             ttk.Label(frm, text=label).grid(row=r + 5 + i, column=0, sticky="w", pady=(6, 0))
             dev_boxes[kind] = ttk.Combobox(frm, textvariable=var, state="readonly", width=44)
             dev_boxes[kind].grid(row=r + 5 + i, column=1, columnspan=2, sticky="w", pady=(6, 0))
         hint = ttk.Frame(frm)
         hint.grid(row=r + 7, column=0, columnspan=3, sticky="we")
         ttk.Label(hint, style="Hint.TLabel",
-                  text="录音、两页的播放都用这里选的设备；刚插上耳机就点「刷新」").pack(side="left")
-        ttk.Button(hint, text="刷新", width=6,
+                  text=tr("录音、两页的播放都用这里选的设备；刚插上耳机就点「刷新」")).pack(side="left")
+        ttk.Button(hint, text=tr("刷新"), width=6,
                    command=lambda: load_devices()).pack(side="right", pady=(4, 0))
 
         def load_devices():
@@ -1125,7 +1138,7 @@ class Player:
             try:
                 s = {k: float(v.get()) for k, v in vars_.items()}
             except (tk.TclError, ValueError):
-                messagebox.showerror("设置", "请填数字", parent=win)
+                messagebox.showerror(tr("设置"), tr("请填数字"), parent=win)
                 return None
             if auto.get():
                 s["threshold"] = None
@@ -1133,6 +1146,7 @@ class Player:
             s["whisper_model"] = sub_model.get()
             for k, var in (("mic", mic), ("speaker", speaker)):
                 s[k] = None if var.get() == SYSTEM_DEVICE else var.get()
+            s["language"] = lang_of[lang_var.get()]
             return s
 
         def apply():
@@ -1141,6 +1155,13 @@ class Player:
                 return
             self.opts.update(s)
             save_settings(self.opts)
+            if s["language"] != i18n.LANG:  # Labels are built at start, so a new language needs a restart
+                if self.restart is None:
+                    messagebox.showinfo(tr("设置"), tr("界面语言改好了，下次打开程序时生效。"), parent=win)
+                elif messagebox.askyesno(tr("设置"), tr("界面语言改好了，重启程序后生效。现在重启吗？"),
+                                         parent=win):
+                    self.restart()
+                    return
             apply_audio_devices(self.opts)
             self.resplit()
             self.start_subs()
@@ -1161,7 +1182,7 @@ class Player:
 
         btns = ttk.Frame(win, padding=(0, 10, 0, 12))
         btns.pack()
-        for text, cmd in (("应用并保存", apply), ("恢复默认", reset), ("关闭", win.destroy)):
+        for text, cmd in ((tr("应用并保存"), apply), (tr("恢复默认"), reset), (tr("关闭##button"), win.destroy)):
             ttk.Button(btns, text=text, width=10, command=cmd).pack(side="left", padx=4)
         win.bind("<Return>", lambda e: apply())
         win.bind("<Escape>", lambda e: win.destroy())
@@ -1184,7 +1205,7 @@ class Player:
             save_settings(self.opts)
         if not self.opts["auto_next"] and self.auto_job:
             self.cancel_auto()
-            self.refresh("⏸ 已暂停，按空格继续")
+            self.refresh(tr("⏸ 已暂停，按空格继续"))
         if give_back_focus:
             self.bar.master.focus_set()  # Give focus back to the page, so Space and other shortcuts keep working
 
@@ -1212,13 +1233,13 @@ class Player:
             return
         if self.playing or self.pending or self.auto_job:
             self.stop_all()  # Space during the countdown = cancel auto play and stay on this sentence
-            self.refresh("已停止")
+            self.refresh(tr("已停止"))
         elif not self.played:
             self.play(self.cur)
         elif self.cur < len(self.segs) - 1:
             self.play(self.cur + 1)
         else:
-            self.refresh("已经是最后一句（← 返回，R 重听）")
+            self.refresh(tr("已经是最后一句（← 返回，R 重听）"))
 
     def play(self, idx):
         if not self.segs:
@@ -1233,7 +1254,7 @@ class Player:
             s, e = self.segs[idx]
             self.video.start(s / self.sr, e / self.sr, self.screen_box())
             self.pending = (idx, time.monotonic() + 1.5)
-            self.refresh("▶ 准备画面……")
+            self.refresh(tr("▶ 准备画面……"))
         else:
             self.start_audio()
 
@@ -1261,11 +1282,11 @@ class Player:
 
     def update_buttons(self):
         if self.playing or self.pending or self.auto_job:
-            main = "■ 停止"
+            main = tr("■ 停止")
         elif not self.played:
-            main = "▶ 开始"
+            main = tr("▶ 开始")
         else:
-            main = "▶ 继续"  # Same as Space: play the next sentence
+            main = tr("▶ 继续")  # Same as Space: play the next sentence
         b = self.buttons
         b["main"].config(text=main)
         has = "normal" if self.segs else "disabled"
@@ -1276,7 +1297,7 @@ class Player:
                          else "disabled")
         b["sub"].config(state="disabled" if self.opts["subtitles"] == "off" or not self.segs
                         else "normal",
-                        text="隐藏字幕" if self.sub_shown() else "显示字幕")
+                        text=tr("隐藏字幕") if self.sub_shown() else tr("显示字幕"))
         self.sub_mode_var.set(SUB_MODES[self.opts["subtitles"]])
 
     def set_volume(self, v, save=True):
@@ -1284,7 +1305,7 @@ class Player:
         v = round(min(2.5, max(0.5, v)), 2)  # Higher values would only limit harder, not get louder
         self.opts["volume"] = v
         self.vol_var.set(round(v * 100))
-        self.vol_label.config(text=f"音量 {v * 100:.0f}%")
+        self.vol_label.config(text=tr("音量 {v:.0f}%", v=v * 100))
         if save:
             if self.vol_save_job:
                 self.root.after_cancel(self.vol_save_job)
@@ -1309,7 +1330,7 @@ class Player:
 
     def playing_msg(self):
         v = self.opts["speed"]
-        return "▶ 播放中" if v == 1.0 else f"▶ 播放中（{speed_label(v)}）"
+        return tr("▶ 播放中") if v == 1.0 else tr("▶ 播放中（{s}）", s=speed_label(v))
 
     def start_audio(self):
         self.pending = None
@@ -1318,7 +1339,7 @@ class Player:
         try:
             data = stretch(data, self.sr, self.opts["speed"])
         except Exception:  # If changing the speed fails, play at normal speed; listening still works
-            audio_io.log.exception("变速失败，按原速播放")
+            audio_io.log.exception("Speed change failed; playing at normal speed")
         self.play_ratio = (e - s) / max(1, len(data))
         try:
             # On error, re-initialize audio and try once more (see audio_io)
@@ -1343,7 +1364,7 @@ class Player:
         try:
             sd.stop()
         except Exception:  # Stopping must work even if the device is gone: reset the state anyway; the next playback re-initializes
-            audio_io.log.exception("停止播放时出错")
+            audio_io.log.exception("Error while stopping playback")
         self.playing = False
         self.pending = None
         self.cancel_auto()
@@ -1363,7 +1384,7 @@ class Player:
         try:
             self._poll_once()
         except Exception:
-            audio_io.log.exception("poll 出错")
+            audio_io.log.exception("Error in poll")
         self.root.after(15 if self.video else 30, self.poll)
 
     def stream_active(self):
@@ -1371,7 +1392,7 @@ class Player:
             stream = sd.get_stream()
             return stream is not None and stream.active
         except Exception:  # The stream's device is gone: treat it as finished
-            audio_io.log.exception("查询播放状态出错")
+            audio_io.log.exception("Error while checking playback state")
             return False
 
     def _poll_once(self):
@@ -1387,9 +1408,9 @@ class Player:
                 if self.schedule_auto():
                     self.refresh(self.auto_msg())
                 elif self.opts["auto_next"] and self.cur == len(self.segs) - 1:
-                    self.refresh("✓ 已播完最后一句")
+                    self.refresh(tr("✓ 已播完最后一句"))
                 else:
-                    self.refresh("⏸ 已暂停，按空格继续")
+                    self.refresh(tr("⏸ 已暂停，按空格继续"))
             else:
                 s, e = self.segs[self.cur]
                 pos = min(e, s + (time.monotonic() - self.t0) * self.sr * self.play_ratio)  # At other speeds, scale back to the position in the original audio
@@ -1404,7 +1425,7 @@ class Player:
 
     def auto_msg(self):
         left = max(0.0, self.auto_due - time.monotonic())
-        return f"⏸ {left:.1f} 秒后自动播放下一句（空格 = 取消）"
+        return tr("⏸ {left:.1f} 秒后自动播放下一句（空格 = 取消）", left=left)
 
     # ---------- Picture ----------
     def show_due_frame(self, now):
@@ -1437,9 +1458,8 @@ class Player:
 
     def refresh(self, msg):
         s, e = self.segs[self.cur]
-        self.big.config(text=f"第 {self.cur + 1} / {len(self.segs)} 句")
-        self.info.config(text=f"{fmt(s / self.sr)} – {fmt(e / self.sr)}"
-                              f"（{(e - s) / self.sr:.1f} 秒）")
+        self.big.config(text=tr("第 {i} / {n} 句", i=self.cur + 1, n=len(self.segs)))
+        self.info.config(text=tr("{a} – {b}（{d:.1f} 秒）", a=fmt(s / self.sr), b=fmt(e / self.sr), d=(e - s) / self.sr))
         self.status.config(text=msg, fg=ui_style.OK)
         self.update_sub()
         self.update_buttons()

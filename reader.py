@@ -32,10 +32,11 @@ import intensive_listening
 import transcriber
 import tts
 import ui_style
+from i18n import tr
 
 REC_LIMIT = 600   # "录我的朗读" (record my reading) is limited to 10 minutes
 MY_REC_DIR = os.path.join(app_paths.RECORDINGS_DIR, "reader")
-GUIDE = "① 写好英文（或粘贴）  ② ▶ 朗读，听标准读法  ③ ● 录下自己读一遍  ④ ✓ 检查发音 / ↔ 逐句对比"
+GUIDE = tr("① 写好英文（或粘贴）  ② ▶ 朗读，听标准读法  ③ ● 录下自己读一遍  ④ ✓ 检查发音 / ↔ 逐句对比")
 
 _WORD = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)*")
 
@@ -119,9 +120,9 @@ class Reader:
         # --- Toolbar: text file + offline voice ---
         top = self.top = ttk.Frame(parent, padding=(P, P, P, 0))
         top.pack(fill="x")
-        ttk.Button(top, text="打开文本…", command=self.open_text).pack(side="left")
-        ttk.Button(top, text="保存文本…", command=self.save_text).pack(side="left", padx=4)
-        ttk.Button(top, text="清空", command=self.clear_text).pack(side="left")
+        ttk.Button(top, text=tr("打开文本…"), command=self.open_text).pack(side="left")
+        ttk.Button(top, text=tr("保存文本…"), command=self.save_text).pack(side="left", padx=4)
+        ttk.Button(top, text=tr("清空"), command=self.clear_text).pack(side="left")
         self.offline_btn = ttk.Button(top, command=self.download_offline)
         self.offline_btn.pack(side="right")
         self.offline_lbl = ttk.Label(top, style="Hint.TLabel")
@@ -130,29 +131,29 @@ class Reader:
         # --- Voice options ---
         opt = ttk.Frame(parent, padding=(P, 8, P, 0))
         opt.pack(fill="x")
-        ttk.Label(opt, text="语音").pack(side="left")
+        ttk.Label(opt, text=tr("语音")).pack(side="left")
         voice = settings["tts_voice"] if settings["tts_voice"] in tts.VOICE_NAMES else tts.VOICE_IDS[0]
         self.voice_var = tk.StringVar(value=tts.VOICE_NAMES[voice])
         vbox = ttk.Combobox(opt, textvariable=self.voice_var, state="readonly", width=18,
                             values=[tts.VOICE_NAMES[v] for v in tts.VOICE_IDS])
         vbox.pack(side="left", padx=(6, 14))
         vbox.bind("<<ComboboxSelected>>", lambda e: (vbox.selection_clear(), self.on_option()))
-        ttk.Label(opt, text="语速").pack(side="left")
+        ttk.Label(opt, text=tr("语速")).pack(side="left")
         self.speed_var = tk.StringVar(value=f"{settings['tts_speed']:g}")
         sp = ttk.Spinbox(opt, from_=tts.SPEED_RANGE[0], to=tts.SPEED_RANGE[1], increment=0.1,
                          width=5, textvariable=self.speed_var, command=self.on_option)
         sp.pack(side="left", padx=(6, 2))
-        ttk.Label(opt, text="倍").pack(side="left", padx=(0, 14))
-        ttk.Label(opt, text="句间停顿").pack(side="left")
+        ttk.Label(opt, text=tr("倍")).pack(side="left", padx=(0, 14))
+        ttk.Label(opt, text=tr("句间停顿")).pack(side="left")
         self.pause_var = tk.StringVar(value=f"{settings['tts_pause']:g}")
         ps = ttk.Spinbox(opt, from_=tts.PAUSE_RANGE[0], to=tts.PAUSE_RANGE[1], increment=0.1,
                          width=5, textvariable=self.pause_var, command=self.on_option)
         ps.pack(side="left", padx=(6, 2))
-        ttk.Label(opt, text="秒").pack(side="left", padx=(0, 14))
+        ttk.Label(opt, text=tr("秒")).pack(side="left", padx=(0, 14))
         for w in (sp, ps):
             w.bind("<Return>", lambda e: self.on_option())
             w.bind("<FocusOut>", lambda e: self.on_option())
-        ttk.Label(opt, text="引擎").pack(side="left")
+        ttk.Label(opt, text=tr("引擎")).pack(side="left")
         self.engine_var = tk.StringVar(value=tts.ENGINES.get(settings["tts_engine"],
                                                               tts.ENGINES["auto"]))
         ebox = ttk.Combobox(opt, textvariable=self.engine_var, state="readonly", width=14,
@@ -165,7 +166,7 @@ class Reader:
         guide.pack(fill="x")
         self.guide_lbl = ttk.Label(guide, text=GUIDE, style="Hint.TLabel")
         self.guide_lbl.pack(side="left")
-        self.edit_btn = ttk.Button(guide, text="✎ 返回编辑", command=self.show_editor)
+        self.edit_btn = ttk.Button(guide, text=tr("✎ 返回编辑"), command=self.show_editor)
         tf = ttk.Frame(parent, padding=(P, 0, P, 0))
         tf.pack(fill="both", expand=True)
         self.edit_frame = ttk.Frame(tf)
@@ -197,11 +198,11 @@ class Reader:
         # --- Reference reading ---
         std = ttk.Frame(parent, padding=(P, P, P, 0))
         std.pack(fill="x")
-        self.read_btn = ttk.Button(std, text="▶ 朗读", width=BW, command=self.read_aloud)
+        self.read_btn = ttk.Button(std, text=tr("▶ 朗读"), width=BW, command=self.read_aloud)
         self.read_btn.pack(side="left")
-        self.stop_btn = ttk.Button(std, text="■ 停止", width=8, command=self.stop)
+        self.stop_btn = ttk.Button(std, text=tr("■ 停止"), width=8, command=self.stop)
         self.stop_btn.pack(side="left", padx=(4, 12))
-        self.save_audio_btn = ttk.Button(std, text="保存朗读音频…", command=self.save_audio)
+        self.save_audio_btn = ttk.Button(std, text=tr("保存朗读音频…"), command=self.save_audio)
         self.save_audio_btn.pack(side="right")
         self.std_time = tk.StringVar(value="")
         ttk.Label(std, textvariable=self.std_time, width=16, anchor="e").pack(side="right")
@@ -211,16 +212,16 @@ class Reader:
         # --- My reading ---
         me = ttk.Frame(parent, padding=(P, 8, P, 0))
         me.pack(fill="x")
-        self.rec_btn = ttk.Button(me, text="● 录我的朗读", width=BW, command=self.toggle_record)
+        self.rec_btn = ttk.Button(me, text=tr("● 录我的朗读"), width=BW, command=self.toggle_record)
         self.rec_btn.pack(side="left")
         self.rec_dot = tk.Label(me, text="", fg=ui_style.REC, width=7, anchor="w",
                                 font=(ui_style.FONT, 10, "bold"))
         self.rec_dot.pack(side="left", padx=(6, 0))
-        self.play_me_btn = ttk.Button(me, text="▶ 听我的", command=self.play_mine)
+        self.play_me_btn = ttk.Button(me, text=tr("▶ 听我的"), command=self.play_mine)
         self.play_me_btn.pack(side="left", padx=(0, 4))
-        self.cmp_btn = ttk.Button(me, text="↔ 逐句对比", command=self.compare_play)
+        self.cmp_btn = ttk.Button(me, text=tr("↔ 逐句对比"), command=self.compare_play)
         self.cmp_btn.pack(side="left", padx=(0, 4))
-        self.check_btn = ttk.Button(me, text="✓ 检查发音", command=self.check)
+        self.check_btn = ttk.Button(me, text=tr("✓ 检查发音"), command=self.check)
         self.check_btn.pack(side="left")
         self.me_time = tk.StringVar(value="")
         ttk.Label(me, textvariable=self.me_time, width=16, anchor="e").pack(side="right")
@@ -229,15 +230,15 @@ class Reader:
         cmp = ttk.Frame(parent, padding=(P, 8, P, 0))
         cmp.pack(fill="x")
         self.cmp_buttons = {}
-        for key, text, cmd, w in (("prev", "⏮ 上一句", lambda: self.play_pair(self.cmp_idx - 1), 9),
-                                  ("again", "↻ 重听这句", lambda: self.play_pair(self.cmp_idx), 10),
-                                  ("next", "下一句 ⏭", lambda: self.play_pair(self.cmp_idx + 1), 9),
-                                  ("stop", "■ 停止", self.stop, 7)):
+        for key, text, cmd, w in (("prev", tr("⏮ 上一句"), lambda: self.play_pair(self.cmp_idx - 1), 9),
+                                  ("again", tr("↻ 重听这句"), lambda: self.play_pair(self.cmp_idx), 10),
+                                  ("next", tr("下一句 ⏭"), lambda: self.play_pair(self.cmp_idx + 1), 9),
+                                  ("stop", tr("■ 停止"), self.stop, 7)):
             b = ttk.Button(cmp, text=text, width=w, command=cmd)
             b.pack(side="left", padx=(0, 4))
             self.cmp_buttons[key] = b
         self.cmp_auto = tk.BooleanVar(value=settings["cmp_auto"])
-        ttk.Checkbutton(cmp, text="连续播放", variable=self.cmp_auto,
+        ttk.Checkbutton(cmp, text=tr("连续播放"), variable=self.cmp_auto,
                         command=self.on_cmp_auto).pack(side="right")
         self.cmp_info = ttk.Label(cmp, width=30, anchor="w")
         self.cmp_info.pack(side="right", padx=(8, 8))
@@ -261,7 +262,7 @@ class Reader:
         self.heard.tag_configure("extra", foreground="#888888", overstrike=True)
         self.heard.tag_configure("label", foreground=ui_style.MUTED)
 
-        self.status = tk.StringVar(value="写好英文后点「▶ 朗读」")
+        self.status = tk.StringVar(value=tr("写好英文后点「▶ 朗读」"))
         ttk.Label(parent, textvariable=self.status, foreground=ui_style.OK,
                   padding=(P, 6, P, P)).pack(fill="x")
 
@@ -310,22 +311,22 @@ class Reader:
         self.refresh()
 
     def open_text(self):
-        path = filedialog.askopenfilename(filetypes=[("文本", "*.txt"), ("所有文件", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[(tr("文本"), "*.txt"), (tr("所有文件"), "*.*")])
         if path:
             with open(path, encoding="utf-8", errors="replace") as f:
                 self.set_text(f.read())
-            self.status.set(f"已打开：{os.path.basename(path)}")
+            self.status.set(tr("已打开：{name}", name=os.path.basename(path)))
 
     def save_text(self):
         path = filedialog.asksaveasfilename(defaultextension=".txt", initialfile="answer.txt",
-                                            filetypes=[("文本", "*.txt")])
+                                            filetypes=[(tr("文本"), "*.txt")])
         if path:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self.get_text().rstrip() + "\n")
-            self.status.set(f"文字已保存：{path}")
+            self.status.set(tr("文字已保存：{path}", path=path))
 
     def clear_text(self):
-        if self.get_text().strip() and not messagebox.askyesno("清空", "清空文字框里的内容吗？"):
+        if self.get_text().strip() and not messagebox.askyesno(tr("清空"), tr("清空文字框里的内容吗？")):
             return
         self.set_text("")
 
@@ -362,7 +363,7 @@ class Reader:
             return
         text = self.get_text()
         if not text.strip():
-            self.status.set("先在上面写一段英文")
+            self.status.set(tr("先在上面写一段英文"))
             return
         self.stop()
         if self.speech:
@@ -374,18 +375,18 @@ class Reader:
     def _synth_worker(self, text, voice, speed, pause, engine):
         def progress(i, n, eng):
             self.events.put(("progress", (100 * i / n,
-                                          f"{tts.ENGINE_NAMES[eng]} 合成中…… 第 {min(i + 1, n)} / {n} 句")))
+                                          tr("{engine} 合成中…… 第 {i} / {n} 句", engine=tts.ENGINE_NAMES[eng], i=min(i + 1, n), n=n))))
         try:
             sp = tts.synthesize(text, voice, speed, pause, engine, progress, self.cancel_ev)
             self.events.put(("synth_done", (text, sp)))
         except (tts.Cancelled, transcriber.Cancelled):
-            self.events.put(("job_end", "已取消"))
+            self.events.put(("job_end", tr("已取消")))
         except Exception as e:
             self.events.put(("synth_error", str(e)))
 
     def play_speech(self):
         sp = self.speech
-        self.start_playlist([(sp.path, 0.0, None, None)], "▶ 标准朗读中")
+        self.start_playlist([(sp.path, 0.0, None, None)], tr("▶ 标准朗读中"))
 
     def save_audio(self):
         if not self.speech:
@@ -397,32 +398,31 @@ class Reader:
             return
         try:
             transcriber.convert_audio(self.speech.path, dst)
-            self.status.set(f"朗读音频已保存：{dst}")
+            self.status.set(tr("朗读音频已保存：{dst}", dst=dst))
         except Exception as e:
-            messagebox.showerror("保存失败", str(e))
+            messagebox.showerror(tr("保存失败"), str(e))
 
     # ---------- Offline voice ----------
     def download_offline(self):
         if self.job or tts.offline_ready():
             return
         if not messagebox.askyesno(
-                "下载离线语音",
-                f"要从 GitHub 下载 Kokoro 离线语音模型吗？\n大约 {tts.OFFLINE_SIZE_MB} MB，"
-                f"只需下载一次，存在：\n{tts.KOKORO_DIR}\n\n下载后，没网时也能朗读。"):
+                tr("下载离线语音"),
+                tr("要从 GitHub 下载 Kokoro 离线语音模型吗？\n大约 {mb} MB，只需下载一次，存在：\n{folder}\n\n下载后，没网时也能朗读。", mb=tts.OFFLINE_SIZE_MB, folder=tts.KOKORO_DIR)):
             return
         self.start_job("download", self._download_worker)
 
     def _download_worker(self):
         def progress(done, total):
             self.events.put(("progress", (100 * done / total if total else 0,
-                                          f"下载离线语音…… {done / 1e6:.0f} / {total / 1e6:.0f} MB")))
+                                          tr("下载离线语音…… {done:.0f} / {total:.0f} MB", done=done / 1e6, total=total / 1e6))))
         try:
             tts.download_offline(progress, self.cancel_ev)
-            self.events.put(("job_end", "离线语音下载好了，没网时也能朗读"))
+            self.events.put(("job_end", tr("离线语音下载好了，没网时也能朗读")))
         except tts.Cancelled:
-            self.events.put(("job_end", "已取消下载"))
+            self.events.put(("job_end", tr("已取消下载")))
         except Exception as e:
-            self.events.put(("job_error", f"离线语音没能下载：{e}"))
+            self.events.put(("job_error", tr("离线语音没能下载：{e}", e=e)))
 
     # ---------- My reading ----------
     def toggle_record(self):
@@ -432,36 +432,35 @@ class Reader:
         if self.job:
             return
         if self.mic_busy():
-            self.status.set("转录页正在录音，等它录完再录")
+            self.status.set(tr("转录页正在录音，等它录完再录"))
             return
         self.stop()   # Don't record the sound from the speakers too
         path = os.path.join(MY_REC_DIR, time.strftime("me_%Y%m%d_%H%M%S.wav"))
         try:
             self.recorder.start(REC_LIMIT, path)
         except Exception as e:
-            messagebox.showerror("录音失败", f"打不开麦克风：\n{e}")
+            messagebox.showerror(tr("录音失败"), tr("打不开麦克风：\n{e}", e=e))
             return
-        self.status.set("正在录音……对着麦克风把上面的文字读一遍，读完点「■ 停止录音」")
+        self.status.set(tr("正在录音……对着麦克风把上面的文字读一遍，读完点「■ 停止录音」"))
         self.refresh()
 
     def finish_record(self):
         try:
             path = self.recorder.finish()
         except Exception as e:
-            messagebox.showerror("录音失败", str(e))
+            messagebox.showerror(tr("录音失败"), str(e))
             path = None
         if path:
             self.mine = path
             self.clear_result()
-            self.status.set(f"录好了 {transcriber.App.fmt_time(self.recorder.elapsed)}："
-                            "可以「▶ 听我的」，或「✓ 检查发音」")
+            self.status.set(tr("录好了 {t}：可以「▶ 听我的」，或「✓ 检查发音」", t=transcriber.App.fmt_time(self.recorder.elapsed)))
         else:
-            self.status.set("录音已停止，没有录到声音")
+            self.status.set(tr("录音已停止，没有录到声音"))
         self.refresh()
 
     def play_mine(self):
         if self.mine and not self.recorder.active:
-            self.start_playlist([(self.mine, 0.0, None, None)], "▶ 播放我的录音")
+            self.start_playlist([(self.mine, 0.0, None, None)], tr("▶ 播放我的录音"))
 
     # ---------- Compare by sentence ----------
     def pairs(self):
@@ -478,10 +477,10 @@ class Reader:
             return
         text = self.get_text()
         if not self.mine:
-            self.status.set("先「● 录我的朗读」，把上面的文字读一遍，再逐句对比")
+            self.status.set(tr("先「● 录我的朗读」，把上面的文字读一遍，再逐句对比"))
             return
         if not text.strip():
-            self.status.set("文字框是空的，没法对比")
+            self.status.set(tr("文字框是空的，没法对比"))
             return
         if not self.speech:   # Step 1: synthesize the reference reading (don't play it when done; go on to the next step)
             self.cmp_pending = True
@@ -510,8 +509,8 @@ class Reader:
         self.cmp_idx = i
         if self.view != "list":
             self.show_list()   # While comparing, view one sentence per line
-        note = "" if m else "（你的录音里没找到这句，只放标准）"
-        self.start_playlist(items, f"↔ 逐句对比：第 {i + 1} / {len(pairs)} 句，先标准，再你的{note}")
+        note = "" if m else tr("（你的录音里没找到这句，只放标准）")
+        self.start_playlist(items, tr("↔ 逐句对比：第 {i} / {n} 句，先标准，再你的{note}", i=i + 1, n=len(pairs), note=note))
         self.cmp_playing = True
         self.refresh()
 
@@ -522,12 +521,12 @@ class Reader:
         i = self.cmp_idx
         self.set_now(i)   # Also mark which sentence it is when stopped
         if self.cmp_auto.get() and i < n - 1:
-            self.status.set(f"第 {i + 1} 句对比完，马上放下一句……")
+            self.status.set(tr("第 {i} 句对比完，马上放下一句……", i=i + 1))
             self.pl_wait = self.root.after(800, lambda: self.play_pair(i + 1))
         elif i >= n - 1:
-            self.status.set(f"全部 {n} 句对比完了：可以「↻ 重听这句」，或「⏮ 上一句」往回听")
+            self.status.set(tr("全部 {n} 句对比完了：可以「↻ 重听这句」，或「⏮ 上一句」往回听", n=n))
         else:
-            self.status.set(f"第 {i + 1} 句对比完：「↻ 重听这句」再听一遍，或者「下一句 ⏭」")
+            self.status.set(tr("第 {i} 句对比完：「↻ 重听这句」再听一遍，或者「下一句 ⏭」", i=i + 1))
         self.refresh()
 
     def on_cmp_auto(self):
@@ -545,7 +544,7 @@ class Reader:
                 return
 
     # ---------- Sentence view (one sentence per line) ----------
-    LIST_GUIDE = "逐句视图：一句一行，点哪一行就对比哪一句   红色 = 漏读，橙色 = 读错，行尾 = 这句读对的词数"
+    LIST_GUIDE = tr("逐句视图：一句一行，点哪一行就对比哪一句   红色 = 漏读，橙色 = 读错，行尾 = 这句读对的词数")
 
     def show_list(self):
         """Show the text one sentence per line (only the display changes; the original paragraphs and line breaks are kept)."""
@@ -601,18 +600,18 @@ class Reader:
             return
         text = self.get_text()
         if not text.strip():
-            self.status.set("文字框是空的，没法对比")
+            self.status.set(tr("文字框是空的，没法对比"))
             return
         self.stop()
         self.start_job("check", self._check_worker, self.mine, text, self.settings["whisper_model"])
 
     def _check_worker(self, path, text, model):
-        self.events.put(("progress", (0, f"用 Whisper（{model}）听你的录音……第一次会慢一些")))
+        self.events.put(("progress", (0, tr("用 Whisper（{model}）听你的录音……第一次会慢一些", model=model))))
         try:
             words = intensive_listening.transcribe_words(path, model)
             self.events.put(("check_done", (path, text, compare_reading(text, words))))
         except Exception as e:
-            self.events.put(("job_error", f"检查没能完成：{e}"))
+            self.events.put(("job_error", tr("检查没能完成：{e}", e=e)))
 
     def show_result(self, r):
         self.result = r
@@ -622,12 +621,10 @@ class Reader:
             if st != "ok":
                 self.text.tag_add(st, f"1.0+{a}c", f"1.0+{b}c")
         pct = 100 * r["correct"] / r["total"] if r["total"] else 0
-        self.score.config(text=f"读对 {r['correct']} / {r['total']} 个词（{pct:.0f}%）"
-                               f"   漏读 {r['miss']}   读错 {r['wrong']}   多读 {r['extra']}"
-                               "      红色 = 漏读，橙色 = 被听成了别的词")
+        self.score.config(text=tr("读对 {ok} / {total} 个词（{pct:.0f}%）   漏读 {miss}   读错 {wrong}   多读 {extra}      红色 = 漏读，橙色 = 被听成了别的词", ok=r['correct'], total=r['total'], pct=pct, miss=r['miss'], wrong=r['wrong'], extra=r['extra']))
         self.heard.config(state="normal")
         self.heard.delete("1.0", "end")
-        self.heard.insert("end", "Whisper 听到的：", "label")
+        self.heard.insert("end", tr("Whisper 听到的："), "label")
         for w, st in r["hyp"]:
             self.heard.insert("end", " ")
             self.heard.insert("end", w, () if st == "ok" else st)
@@ -663,7 +660,7 @@ class Reader:
                 self.pair_done()
                 return
             self.set_now(None)
-            self.status.set("播放完了")
+            self.status.set(tr("播放完了"))
             self.refresh()
             return
         path, start, _, _ = self.playlist[self.pl_idx]
@@ -730,31 +727,30 @@ class Reader:
                     text, sp = msg
                     if text == self.get_text():   # The text wasn't edited during synthesis
                         self.speech = sp
-                        how = "（离线）" if sp.engine == "kokoro" else ""
+                        how = tr("（离线）") if sp.engine == "kokoro" else ""
                         if pending:
-                            self.status.set(f"标准朗读合成好了{how}，接着检查发音……")
+                            self.status.set(tr("标准朗读合成好了{how}，接着检查发音……", how=how))
                             self.root.after(10, self.compare_play)
                         else:
-                            self.status.set(f"合成好了{how}，开始朗读")
+                            self.status.set(tr("合成好了{how}，开始朗读", how=how))
                             self.play_speech()
                 elif kind == "synth_error":
-                    self.status.set("朗读失败")
+                    self.status.set(tr("朗读失败"))
                     if tts.offline_ready():
-                        messagebox.showerror("朗读失败", msg)
+                        messagebox.showerror(tr("朗读失败"), msg)
                     elif messagebox.askyesno(
-                            "朗读失败", f"{msg}\n\n要下载离线语音（约 {tts.OFFLINE_SIZE_MB} MB）吗？"
-                                        "下载后没网也能朗读。"):
+                            tr("朗读失败"), tr("{msg}\n\n要下载离线语音（约 {mb} MB）吗？下载后没网也能朗读。", msg=msg, mb=tts.OFFLINE_SIZE_MB)):
                         self.root.after(10, self.download_offline_now)
                 elif kind == "check_done":
                     path, text, r = msg
                     if path == self.mine and text == self.get_text():
                         self.show_result(r)
-                        self.status.set("检查完了：可以「↔ 逐句对比」，一句一句听差别")
+                        self.status.set(tr("检查完了：可以「↔ 逐句对比」，一句一句听差别"))
                         if pending:   # This check was started by "逐句对比": start comparing next
                             self.root.after(10, self.compare_play)
                 elif kind == "job_error":
-                    self.status.set("出错了")
-                    messagebox.showerror("出错了", msg)
+                    self.status.set(tr("出错了"))
+                    messagebox.showerror(tr("出错了"), msg)
                 else:   # job_end
                     self.status.set(msg)
                 self.refresh()
@@ -772,7 +768,7 @@ class Reader:
         """Playback progress, the sentence being read, moving to the next part while comparing, recording timer."""
         p = self.player
         if p.error:
-            self.status.set(f"播放出错：{p.error}")
+            self.status.set(tr("播放出错：{err}", err=p.error))
             p.error = None
         if self.playlist and self.pl_idx >= 0 and not self.pl_wait:
             path, start, end, sent = self.playlist[self.pl_idx]
@@ -795,7 +791,7 @@ class Reader:
         if self.speech and self.player.path == self.speech.path and self.playlist:
             self.std_time.set(f"{fmt(p.position)} / {fmt(p.duration)}")
         elif self.speech:
-            self.std_time.set(f"共 {fmt(self.speech.times[-1][1])}")
+            self.std_time.set(tr("共 {t}", t=fmt(self.speech.times[-1][1])))
         else:
             self.std_time.set("")
         r = self.recorder
@@ -804,12 +800,12 @@ class Reader:
                 self.finish_record()
             else:
                 dot = "●" if int(time.time() * 2) % 2 == 0 else "  "
-                self.rec_dot.config(text=f"{dot} 录音中")
+                self.rec_dot.config(text=tr("{dot} 录音中", dot=dot))
                 self.me_time.set(f"{fmt(r.elapsed)} / {fmt(REC_LIMIT)}")
         else:
             if self.rec_dot.cget("text"):
                 self.rec_dot.config(text="")
-            self.me_time.set(f"我的录音 {fmt(self.recorder.elapsed)}" if self.mine else "")
+            self.me_time.set(tr("我的录音 {t}", t=fmt(self.recorder.elapsed)) if self.mine else "")
 
     def _sentence_at(self, pos):
         for i, (a, b) in enumerate(self.speech.times):
@@ -826,7 +822,7 @@ class Reader:
         self.read_btn.config(state=st(has_text and not busy and not rec))
         self.stop_btn.config(state=st(playing or self.job in ("synth", "check")))
         self.save_audio_btn.config(state=st(self.speech is not None and not busy))
-        self.rec_btn.config(text="■ 停止录音" if rec else "● 录我的朗读",
+        self.rec_btn.config(text=tr("■ 停止录音") if rec else tr("● 录我的朗读"),
                             state=st(rec or not busy))
         self.play_me_btn.config(state=st(self.mine and not rec))
         self.cmp_btn.config(state=st(self.mine and has_text and not rec and not busy))
@@ -842,29 +838,29 @@ class Reader:
         self.cmp_bar.config(maximum=max(n, 1), value=(i + 1) if pairs else 0)
         self.update_cmp_info()
         if tts.offline_ready():
-            self.offline_lbl.config(text="离线语音 ✓ 已下载")
+            self.offline_lbl.config(text=tr("离线语音 ✓ 已下载"))
             self.offline_btn.pack_forget()
         else:
-            self.offline_lbl.config(text="没网时用的离线语音：")
+            self.offline_lbl.config(text=tr("没网时用的离线语音："))
             if not self.offline_btn.winfo_manager():
                 self.offline_btn.pack(side="right")
-            self.offline_btn.config(text=f"下载（约 {tts.OFFLINE_SIZE_MB} MB）",
+            self.offline_btn.config(text=tr("下载（约 {mb} MB）", mb=tts.OFFLINE_SIZE_MB),
                                     state=st(not busy))
 
     def update_cmp_info(self):
         pairs = self.pairs()
         if not pairs:
-            hint = ("点「↔ 逐句对比」开始（缺朗读 / 检查会自动先做）" if self.mine
-                    else "录好自己的朗读后，可以逐句对比")
+            hint = (tr("点「↔ 逐句对比」开始（缺朗读 / 检查会自动先做）") if self.mine
+                    else tr("录好自己的朗读后，可以逐句对比"))
             self.cmp_info.config(text=hint, style="Hint.TLabel")
             return
         i, n = self.cmp_idx, len(pairs)
-        text = f"第 {i + 1} / {n} 句"
+        text = tr("第 {i} / {n} 句##cmp", i=i + 1, n=n)
         if self.cmp_playing and 0 <= self.pl_idx < len(self.playlist):
-            part = "标准" if self.playlist[self.pl_idx][0] == self.speech.path else "你的"
-            text += f" · 正在放：{part}"
+            part = tr("标准") if self.playlist[self.pl_idx][0] == self.speech.path else tr("你的")
+            text += tr(" · 正在放：{part}", part=part)
         elif pairs[i][2] is None:
-            text += " · 你的录音里没找到这句"
+            text += tr(" · 你的录音里没找到这句")
         self.cmp_info.config(text=text, style="TLabel")
 
     def shutdown(self):

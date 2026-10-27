@@ -35,10 +35,11 @@ import app_paths
 import audio_io
 import intensive_listening
 import ui_style
+from i18n import tr
 
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".wma",
               ".webm", ".mp4", ".mkv", ".mov"}
-DROP_HINT = "把音频或视频文件拖到这里（或点这里选择），然后点「开始转录」"
+DROP_HINT = tr("把音频或视频文件拖到这里（或点这里选择），然后点「开始转录」")
 NO_WINDOW = intensive_listening.NO_WINDOW   # hide the helper Python's console on Windows
 REC_DIR = app_paths.RECORDINGS_DIR
 REC_LENGTHS = (60, 90)   # seconds
@@ -214,8 +215,8 @@ class Player:
             try:
                 import sounddevice as sd
             except ImportError:
-                raise RuntimeError("没有安装 sounddevice，请运行："
-                                   "pip install sounddevice") from None
+                raise RuntimeError(tr("没有安装 sounddevice，请运行："
+                                   "pip install sounddevice")) from None
             # If opening fails, re-initialize audio and try once more; while playing, nobody else may re-initialize (see audio_io)
             with audio_io.call(sd.RawOutputStream, samplerate=self.SR, channels=self.CH,
                                dtype="int16") as stream, audio_io.in_use():
@@ -250,7 +251,7 @@ def convert_audio(src, dst):
     """Re-encode the first audio stream of `src` into `dst` (format from the extension)."""
     ext = os.path.splitext(dst)[1].lower()
     if ext not in OUT_CODECS:
-        raise ValueError(f"不支持的格式：{ext or '（没有扩展名）'}，请用 wav / mp3 / m4a / flac")
+        raise ValueError(tr("不支持的格式：{ext}，请用 wav / mp3 / m4a / flac", ext=ext or tr("（没有扩展名）")))
     tmp = dst + ".part" + ext   # write aside first so a failure doesn't leave half a file
     try:
         with av.open(src) as inp, av.open(tmp, "w") as out:
@@ -354,7 +355,7 @@ class Recorder:
             self._stream.stop()
             self._stream.close()
         except Exception:  # The mic went away mid-recording: still save what was recorded
-            audio_io.log.exception("停止录音时出错")
+            audio_io.log.exception("Error while stopping recording")
         finally:
             audio_io.busy_end()
         self._stream = None
@@ -379,7 +380,7 @@ class App:
         self.embedded = parent is not None
         parent = parent or root
         if not self.embedded:
-            root.title("转录 / 录音 - Whisper")
+            root.title(tr("转录 / 录音 - Whisper"))
             root.geometry("760x580")
         self.base_title = root.title()
         self._worker_thread = None
@@ -403,18 +404,18 @@ class App:
         # --- top bar ---
         top = self.top = ttk.Frame(parent, padding=(P, P, P, P))
         top.pack(fill="x")
-        self.open_btn = ttk.Button(top, text="打开文件…", command=self.browse)
+        self.open_btn = ttk.Button(top, text=tr("打开文件…"), command=self.browse)
         self.open_btn.pack(side="left")
         self.ts_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(top, text="显示时间戳", variable=self.ts_var,
+        ttk.Checkbutton(top, text=tr("显示时间戳"), variable=self.ts_var,
                         command=self.render).pack(side="left", padx=12)
         # The recognition model is chosen only in ⚙ 设置 (shared with the subtitles); here we just show which one is in use
         self.model_label = ttk.Label(top, style="Hint.TLabel")
         self.model_label.pack(side="left")
-        self.save_audio_btn = ttk.Button(top, text="保存音频…", command=self.save_audio)
+        self.save_audio_btn = ttk.Button(top, text=tr("保存音频…"), command=self.save_audio)
         self.save_audio_btn.pack(side="right")
-        ttk.Button(top, text="保存文字…", command=self.save).pack(side="right", padx=4)
-        ttk.Button(top, text="复制文字", command=self.copy).pack(side="right")
+        ttk.Button(top, text=tr("保存文字…"), command=self.save).pack(side="right", padx=4)
+        ttk.Button(top, text=tr("复制文字"), command=self.copy).pack(side="right")
 
         # --- drop zone ---
         self.drop = ui_style.drop_zone(parent, DROP_HINT)
@@ -428,15 +429,15 @@ class App:
         # --- recorder ---
         rec = ttk.Frame(parent, padding=(P, P, P, 0))
         rec.pack(fill="x")
-        self.rec_btn = ttk.Button(rec, text="● 录音", width=BW, command=self.toggle_record)
+        self.rec_btn = ttk.Button(rec, text=tr("● 录音"), width=BW, command=self.toggle_record)
         self.rec_btn.pack(side="left")
         # Length: 60 / 90 s, or "自定 N 分钟" (custom N minutes); the choice is saved in settings.json
         choice = str(self.settings["rec_length"])
         choices = [str(n) for n in REC_LENGTHS] + ["custom"]
         self.rec_choice = tk.StringVar(value=choice if choice in choices else choices[0])
-        self.rec_radios = [ttk.Radiobutton(rec, text=f"{n} 秒", value=str(n),
+        self.rec_radios = [ttk.Radiobutton(rec, text=tr("{n} 秒", n=n), value=str(n),
                                            variable=self.rec_choice) for n in REC_LENGTHS]
-        self.rec_radios.append(ttk.Radiobutton(rec, text="自定", value="custom",
+        self.rec_radios.append(ttk.Radiobutton(rec, text=tr("自定"), value="custom",
                                                variable=self.rec_choice))
         for r in self.rec_radios:
             r.pack(side="left", padx=(10, 0))
@@ -448,13 +449,13 @@ class App:
         self.rec_min_spin.pack(side="left", padx=(4, 2))
         self.rec_min_spin.bind("<Return>", lambda e: self._on_rec_minutes())
         self.rec_min_spin.bind("<FocusOut>", lambda e: self._on_rec_minutes())
-        ttk.Label(rec, text="分钟").pack(side="left")
+        ttk.Label(rec, text=tr("分钟")).pack(side="left")
         self.rec_radios.append(self.rec_min_spin)   # disabled together while recording
         self.rec_dot = tk.Label(rec, text="", fg=ui_style.REC, width=6, anchor="w",
                                 font=(ui_style.FONT, 10, "bold"))
         self.rec_dot.pack(side="left", padx=(8, 0))
         self.auto_tx = tk.BooleanVar(value=True)
-        ttk.Checkbutton(rec, text="录完自动转录",
+        ttk.Checkbutton(rec, text=tr("录完自动转录"),
                         variable=self.auto_tx).pack(side="right")
         self.rec_time = tk.StringVar(value="00:00 / 01:00")
         ttk.Label(rec, textvariable=self.rec_time, width=16, anchor="e").pack(side="right")
@@ -465,9 +466,9 @@ class App:
         # --- start / cancel + progress ---
         ctl = ttk.Frame(parent, padding=(P, P, P, 0))
         ctl.pack(fill="x")
-        self.start_btn = ttk.Button(ctl, text="开始转录", width=BW, command=self.start)
+        self.start_btn = ttk.Button(ctl, text=tr("开始转录"), width=BW, command=self.start)
         self.start_btn.pack(side="left")
-        self.cancel_btn = ttk.Button(ctl, text="取消", width=8, command=self.cancel)
+        self.cancel_btn = ttk.Button(ctl, text=tr("取消"), width=8, command=self.cancel)
         self.cancel_btn.pack(side="left", padx=(4, 12))
         self.pct = tk.StringVar(value="0%")
         ttk.Label(ctl, textvariable=self.pct, width=13, anchor="e").pack(side="right")
@@ -477,9 +478,9 @@ class App:
         # --- audio player ---
         ply = ttk.Frame(parent, padding=(P, P, P, 0))
         ply.pack(fill="x")
-        self.play_btn = ttk.Button(ply, text="▶ 播放", width=BW, command=self.toggle_play)
+        self.play_btn = ttk.Button(ply, text=tr("▶ 播放"), width=BW, command=self.toggle_play)
         self.play_btn.pack(side="left")
-        self.stop_btn = ttk.Button(ply, text="■ 停止", width=8, command=self.stop_play)
+        self.stop_btn = ttk.Button(ply, text=tr("■ 停止"), width=8, command=self.stop_play)
         self.stop_btn.pack(side="left", padx=(4, 12))
         self.time_var = tk.StringVar(value="00:00 / 00:00")
         ttk.Label(ply, textvariable=self.time_var, width=13, anchor="e").pack(side="right")
@@ -511,7 +512,7 @@ class App:
         self.text.bind("<Double-Button-1>", self._on_text_click)
 
         # --- status bar ---
-        self.status = tk.StringVar(value="拖入或录一段音频开始")
+        self.status = tk.StringVar(value=tr("拖入或录一段音频开始"))
         ttk.Label(parent, textvariable=self.status, foreground=ui_style.OK,
                   padding=(P, 0, P, P)).pack(fill="x")
 
@@ -542,10 +543,9 @@ class App:
         try:
             self.recorder.start(seconds, os.path.join(REC_DIR, name))
         except Exception as e:
-            messagebox.showerror("录音失败", f"打不开麦克风：\n{e}")
+            messagebox.showerror(tr("录音失败"), tr("打不开麦克风：\n{e}", e=e))
             return
-        self.status.set(f"正在录音（{self.fmt_time(seconds)}，到时间自动停止；"
-                        "点「停止录音」可提前结束）")
+        self.status.set(tr("正在录音（{t}，到时间自动停止；点「停止录音」可提前结束）", t=self.fmt_time(seconds)))
         self._update_buttons()
 
     def rec_seconds(self):
@@ -580,15 +580,14 @@ class App:
         try:
             path = self.recorder.finish()
         except Exception as e:
-            messagebox.showerror("录音失败", str(e))
+            messagebox.showerror(tr("录音失败"), str(e))
             path = None
         self._update_buttons()
         if not path:
-            self.status.set("录音已停止，没有录到声音")
+            self.status.set(tr("录音已停止，没有录到声音"))
             return
         self.select(path)
-        self.status.set(f"录好了 {self.fmt_time(self.recorder.elapsed)}，"
-                        f"已存到 {path}")
+        self.status.set(tr("录好了 {t}，已存到 {path}", t=self.fmt_time(self.recorder.elapsed), path=path))
         if self.auto_tx.get():
             self.start()
 
@@ -598,15 +597,15 @@ class App:
         done = r.elapsed if r.active else 0
         self.rec_time.set(f"{self.fmt_time(done)} / {self.fmt_time(total)}")
         self.rec_bar["value"] = 100 * done / total if total else 0
-        self.rec_btn.config(text="■ 停止录音" if r.active else "● 录音",
+        self.rec_btn.config(text=tr("■ 停止录音") if r.active else tr("● 录音"),
                             state="disabled" if self._busy and not r.active else "normal")
         for rb in self.rec_radios:
             rb.config(state="disabled" if r.active else "normal")
         # blinking red dot while recording (dot toggles every 0.5s, "REC" stays)
         if r.active:
             dot = "●" if int(time.time() * 2) % 2 == 0 else "  "
-            self.rec_dot.config(text=f"{dot} 录音中")
-            self.root.title(f"● 录音中 - {self.base_title}")
+            self.rec_dot.config(text=tr("{dot} 录音中", dot=dot))
+            self.root.title(tr("● 录音中 - {title}", title=self.base_title))
         elif self.rec_dot.cget("text"):
             self.rec_dot.config(text="")
             self.root.title(self.base_title)
@@ -649,10 +648,10 @@ class App:
     def _refresh_player(self):
         p = self.player
         if p.error:
-            self.status.set(f"播放出错：{p.error}")
+            self.status.set(tr("播放出错：{err}", err=p.error))
             p.error = None
         has_file = bool(p.path)
-        self.play_btn.config(text="❚❚ 暂停" if p.playing else "▶ 播放",
+        self.play_btn.config(text=tr("❚❚ 暂停") if p.playing else tr("▶ 播放"),
                              state="normal" if has_file else "disabled")
         self.stop_btn.config(state="normal" if has_file else "disabled")
         self.seek.config(to=max(p.duration, 1))
@@ -705,34 +704,34 @@ class App:
 
     def browse(self):
         path = filedialog.askopenfilename(
-            filetypes=[("音频/视频", " ".join("*" + e for e in sorted(AUDIO_EXTS))),
-                       ("所有文件", "*.*")])
+            filetypes=[(tr("音频/视频"), " ".join("*" + e for e in sorted(AUDIO_EXTS))),
+                       (tr("所有文件"), "*.*")])
         if path:
             self.select(path)
 
     def select(self, path):
         """Pick a file; transcription only begins when Start is clicked."""
         if self._busy:
-            self.status.set("正在转录，先点「取消」再换文件")
+            self.status.set(tr("正在转录，先点「取消」再换文件"))
             return
         if self.recorder.active:
-            self.status.set("正在录音，先停止录音再换文件")
+            self.status.set(tr("正在录音，先停止录音再换文件"))
             return
         if not os.path.isfile(path):
-            messagebox.showerror("错误", f"不是文件：\n{path}")
+            messagebox.showerror(tr("错误"), tr("不是文件：\n{path}", path=path))
             return
         if os.path.splitext(path)[1].lower() not in AUDIO_EXTS:
-            if not messagebox.askyesno("未知类型",
-                                       "这看起来不像音频文件，还是要用它吗？"):
+            if not messagebox.askyesno(tr("未知类型"),
+                                       tr("这看起来不像音频文件，还是要用它吗？")):
                 return
         self.current_file = path
         self.player.load(path)
         self.segments = []
         self.text.delete("1.0", "end")
         self._cur_line = None
-        self._show_file("点「开始转录」把它转成文字")
+        self._show_file(tr("点「开始转录」把它转成文字"))
         self._set_progress(0)
-        self.status.set("文件已就绪，可以播放，或点「开始转录」")
+        self.status.set(tr("文件已就绪，可以播放，或点「开始转录」"))
         self._update_buttons()
 
     # ---------- start / cancel ----------
@@ -768,7 +767,7 @@ class App:
         if self._busy:
             self._cancel.set()
             self.cancel_btn.config(state="disabled")
-            self.status.set("正在取消……")
+            self.status.set(tr("正在取消……"))
 
     # ---------- whisper progress hook ----------
     def _make_bar_class(self):
@@ -822,7 +821,7 @@ class App:
     # ---------- work ----------
     def _worker(self, path, model_name):
         try:
-            self._events.put(("status", "正在读取音频……"))
+            self._events.put(("status", tr("正在读取音频……")))
             # Whisper wants 16 kHz mono float32; decoding here means it never calls ffmpeg
             audio = intensive_listening.load_audio(path, layout="mono", rate=16000)[0][:, 0]
             if self._cancel.is_set():
@@ -835,9 +834,9 @@ class App:
                 segments = self._transcribe_external(audio, model_name)
             for seg in segments:
                 self._events.put(("seg", seg))
-            self._events.put(("done", f"转录完成：{os.path.basename(path)}"))
+            self._events.put(("done", tr("转录完成：{name}", name=os.path.basename(path))))
         except Cancelled:
-            self._events.put(("cancelled", "已取消"))
+            self._events.put(("cancelled", tr("已取消")))
         except Exception as e:  # show any failure (no Whisper, bad file...)
             self._events.put(("error", str(e)))
 
@@ -846,7 +845,7 @@ class App:
         The loaded models are shared with 精听 subtitles, so wait until they're free."""
         lock = intensive_listening.MODEL_LOCK
         if not lock.acquire(blocking=False):
-            self._events.put(("status", "精听字幕正在用识别模型，等它识别完就开始……"))
+            self._events.put(("status", tr("精听字幕正在用识别模型，等它识别完就开始……")))
             while not lock.acquire(timeout=0.2):
                 if self._cancel.is_set():
                     raise Cancelled()
@@ -866,8 +865,7 @@ class App:
 
         self._patch_whisper()
         if model_name not in self._models:
-            self._events.put(("status", f"正在加载模型 {model_name}"
-                                        "（第一次使用会先下载）……"))
+            self._events.put(("status", tr("正在加载模型 {model}（第一次使用会先下载）……", model=model_name)))
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self._models[model_name] = whisper.load_model(model_name, device=device)
         model = self._models[model_name]
@@ -882,8 +880,7 @@ class App:
     def _transcribe_fw(self, audio, model_name):
         key = ("fw", model_name)
         if key not in self._models:
-            self._events.put(("status", f"正在加载模型 {model_name}"
-                                        "（第一次使用会先下载）……"))
+            self._events.put(("status", tr("正在加载模型 {model}（第一次使用会先下载）……", model=model_name)))
             self._models[key] = intensive_listening.load_fw(model_name)
         model = self._models[key]
         if self._cancel.is_set():
@@ -902,15 +899,13 @@ class App:
 
     def _transcribe_external(self, audio, model_name):
         """Run TRANSCRIBE_HELPER in another Python; it streams JSON lines back on stdout."""
-        self._events.put(("status", "这个程序里没有 Whisper，正在找装了 Whisper 的 Python……"))
+        self._events.put(("status", tr("这个程序里没有 Whisper，正在找装了 Whisper 的 Python……")))
         py = intensive_listening.find_external_python()
         if not py:
-            raise RuntimeError("转录需要 Whisper：在终端运行 "
-                               f"{intensive_listening.INSTALL_HINT}，然后再点「开始转录」")
+            raise RuntimeError(tr("转录需要 Whisper：在终端运行 {cmd}，然后再点「开始转录」", cmd=intensive_listening.INSTALL_HINT))
         if self._cancel.is_set():
             raise Cancelled()
-        self._events.put(("status", f"正在加载模型 {model_name}（用 {py}；"
-                                    "第一次使用会先下载）……"))
+        self._events.put(("status", tr("正在加载模型 {model}（用 {py}；第一次使用会先下载）……", model=model_name, py=py)))
         segments = []
         with tempfile.TemporaryDirectory() as d:
             audio_path = os.path.join(d, "audio.npy")
@@ -942,8 +937,7 @@ class App:
                 if proc.returncode != 0:
                     err.seek(0)
                     lines = err.read().decode("utf-8", "replace").strip().splitlines()
-                    raise RuntimeError(f"{os.path.basename(py)}: "
-                                       f"{lines[-1] if lines else '未知错误'}")
+                    raise RuntimeError(f"{os.path.basename(py)}: {lines[-1] if lines else tr('未知错误')}")
         return segments
 
     def _poll(self):
@@ -953,15 +947,15 @@ class App:
                 if kind == "status":
                     self.status.set(msg)
                 elif kind == "alert":
-                    self.status.set("出错了")
-                    messagebox.showerror("错误", msg)
+                    self.status.set(tr("出错了"))
+                    messagebox.showerror(tr("错误"), msg)
                 elif kind == "saved":
                     self._switch_to_saved(msg)
                 elif kind == "progress":
                     phase, pct = msg
                     self._set_progress(pct)
                     if not self._cancel.is_set():
-                        self.status.set(f"{phase}…… {pct:.0f}%")
+                        self.status.set(tr("{phase}…… {pct:.0f}%", phase=tr(phase), pct=pct))
                 elif kind == "seg":
                     self.segments.append(msg)
                     self.insert_segment(msg)
@@ -970,15 +964,15 @@ class App:
                     self._busy = False
                     if kind == "done":
                         self._set_progress(100)
-                        self._show_file("已转录")
+                        self._show_file(tr("已转录"))
                         if not self.player.duration and self.segments:
                             self.player.duration = self.segments[-1][1]
                     elif kind == "cancelled":
                         self._set_progress(0)
-                    self.status.set(msg if kind != "error" else "出错了")
+                    self.status.set(msg if kind != "error" else tr("出错了"))
                     self._update_buttons()
                     if kind == "error":
-                        messagebox.showerror("转录失败", msg)
+                        messagebox.showerror(tr("转录失败"), msg)
         except queue.Empty:
             pass
         if self.recorder.time_up:
@@ -986,7 +980,7 @@ class App:
         elif self.recorder.active:
             self._refresh_recorder()
         self._refresh_player()
-        model_text = f"模型 {self.get_model()}"   # follows changes made in ⚙ 设置
+        model_text = tr("模型 {m}", m=self.get_model())   # follows changes made in ⚙ 设置
         if self.model_label.cget("text") != model_text:
             self.model_label.config(text=model_text)
         self.root.after(100, self._poll)
@@ -995,7 +989,7 @@ class App:
     def copy(self):
         self.root.clipboard_clear()
         self.root.clipboard_append(self.text.get("1.0", "end").strip())
-        self.status.set("文字已复制到剪贴板")
+        self.status.set(tr("文字已复制到剪贴板"))
 
     def save(self):
         content = self.text.get("1.0", "end").strip()
@@ -1005,11 +999,11 @@ class App:
                    if self.current_file else "transcript.txt")
         path = filedialog.asksaveasfilename(defaultextension=".txt",
                                             initialfile=initial,
-                                            filetypes=[("文本", "*.txt")])
+                                            filetypes=[(tr("文本"), "*.txt")])
         if path:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content + "\n")
-            self.status.set(f"文字已保存：{path}")
+            self.status.set(tr("文字已保存：{path}", path=path))
 
     def save_audio(self):
         """Save the current audio (e.g. a recording) - copied, or converted by extension."""
@@ -1025,9 +1019,9 @@ class App:
         if not dst:
             return
         if os.path.abspath(dst).lower() == os.path.abspath(src).lower():
-            self.status.set("这就是原文件，不用再存")
+            self.status.set(tr("这就是原文件，不用再存"))
             return
-        self.status.set(f"正在保存音频 → {os.path.basename(dst)}……")
+        self.status.set(tr("正在保存音频 → {name}……", name=os.path.basename(dst)))
         threading.Thread(target=self._save_audio_worker, args=(src, dst),
                          daemon=True).start()
 
@@ -1039,7 +1033,7 @@ class App:
                 convert_audio(src, dst)
             self._events.put(("saved", dst))
         except Exception as e:
-            self._events.put(("alert", f"音频没能保存：\n{e}"))
+            self._events.put(("alert", tr("音频没能保存：\n{e}", e=e)))
 
     def _switch_to_saved(self, dst):
         """After Save audio, the saved copy becomes the current file (transcript kept)."""
@@ -1051,8 +1045,8 @@ class App:
             p.play(pos)
         else:
             p.seek(pos)
-        self._show_file("已另存" + ("，已转录" if self.segments else ""))
-        self.status.set(f"音频已保存：{dst}")
+        self._show_file(tr("已另存") + (tr("，已转录") if self.segments else ""))
+        self.status.set(tr("音频已保存：{dst}", dst=dst))
         self._update_buttons()
 
     def _show_file(self, note):
@@ -1061,4 +1055,4 @@ class App:
         folder = os.path.dirname(os.path.abspath(path))
         if len(folder) > 60:   # Keep only the end of a very deep path, so it doesn't fill the drop zone
             folder = "…" + folder[-59:]
-        self.drop.config(text=f"{os.path.basename(path)}\n{folder}\n（{note}）")
+        self.drop.config(text=tr("{name}\n{folder}\n（{note}）", name=os.path.basename(path), folder=folder, note=note))

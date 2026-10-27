@@ -27,23 +27,24 @@ import av
 import numpy as np
 
 import app_paths
+from i18n import tr
 
 SR = 24000   # Both engines output 24 kHz mono
 
 # (id saved in settings = Edge voice name, display name, Kokoro voice, Kokoro accent)
 VOICES = [
-    ("en-CA-ClaraNeural", "加拿大 · 女 · Clara", "af_heart", "en-us"),
-    ("en-CA-LiamNeural", "加拿大 · 男 · Liam", "am_michael", "en-us"),
-    ("en-US-AriaNeural", "美国 · 女 · Aria", "af_bella", "en-us"),
-    ("en-US-GuyNeural", "美国 · 男 · Guy", "am_adam", "en-us"),
-    ("en-US-JennyNeural", "美国 · 女 · Jenny", "af_nicole", "en-us"),
-    ("en-GB-SoniaNeural", "英国 · 女 · Sonia", "bf_emma", "en-gb"),
-    ("en-GB-RyanNeural", "英国 · 男 · Ryan", "bm_george", "en-gb"),
+    ("en-CA-ClaraNeural", tr("加拿大 · 女 · Clara"), "af_heart", "en-us"),
+    ("en-CA-LiamNeural", tr("加拿大 · 男 · Liam"), "am_michael", "en-us"),
+    ("en-US-AriaNeural", tr("美国 · 女 · Aria"), "af_bella", "en-us"),
+    ("en-US-GuyNeural", tr("美国 · 男 · Guy"), "am_adam", "en-us"),
+    ("en-US-JennyNeural", tr("美国 · 女 · Jenny"), "af_nicole", "en-us"),
+    ("en-GB-SoniaNeural", tr("英国 · 女 · Sonia"), "bf_emma", "en-gb"),
+    ("en-GB-RyanNeural", tr("英国 · 男 · Ryan"), "bm_george", "en-gb"),
 ]
 VOICE_IDS = [v[0] for v in VOICES]
 VOICE_NAMES = {v[0]: v[1] for v in VOICES}
-ENGINES = {"auto": "自动（在线优先）", "edge": "只用在线", "offline": "只用离线"}
-ENGINE_NAMES = {"edge": "Edge 在线语音", "kokoro": "Kokoro 离线语音"}
+ENGINES = {"auto": tr("自动（在线优先）"), "edge": tr("只用在线"), "offline": tr("只用离线")}
+ENGINE_NAMES = {"edge": tr("Edge 在线语音"), "kokoro": tr("Kokoro 离线语音")}
 SPEED_RANGE = (0.5, 1.5)
 PAUSE_RANGE = (0.0, 3.0)
 
@@ -117,7 +118,7 @@ def _edge_say(text, voice, speed):
 
     data = asyncio.run(run())
     if not data:
-        raise TTSError("Edge 在线语音没有返回声音")
+        raise TTSError(tr("Edge 在线语音没有返回声音"))
     return _decode(data)
 
 
@@ -176,7 +177,7 @@ def _kokoro_say(text, voice_id, speed):
     with _kokoro_lock:
         if _kokoro is None:
             if not offline_ready():
-                raise TTSError("离线语音还没下载：在「朗读」页点「下载离线语音」")
+                raise TTSError(tr("离线语音还没下载：在「朗读」页点「下载离线语音」"))
             from kokoro_onnx import Kokoro
             _kokoro = Kokoro(os.path.join(KOKORO_DIR, KOKORO_FILES[0]),
                              os.path.join(KOKORO_DIR, KOKORO_FILES[1]))
@@ -245,7 +246,7 @@ def synthesize(text, voice, speed=1.0, pause=0.6, engine="auto", progress=None, 
     progress(sentences done, total sentences, engine); cancel is a threading.Event - when set, raises Cancelled."""
     spans = split_sentences(text)
     if not spans:
-        raise TTSError("没有可以朗读的文字")
+        raise TTSError(tr("没有可以朗读的文字"))
     if voice not in VOICE_NAMES:
         voice = VOICE_IDS[0]
     order = {"auto": ["edge", "kokoro"], "edge": ["edge"], "offline": ["kokoro"]}[engine]
@@ -261,6 +262,6 @@ def synthesize(text, voice, speed=1.0, pause=0.6, engine="auto", progress=None, 
         if order[0] != "edge":
             raise
         if len(order) == 1 or not offline_ready():
-            raise TTSError(f"连不上 Edge 在线语音（{e}）") from e
+            raise TTSError(tr("连不上 Edge 在线语音（{e}）", e=e)) from e
         # "自动" (auto): if online fails, use the offline voice for the whole text (never mix two voices)
         return _render(text, spans, voice, speed, pause, "kokoro", progress, cancel)
