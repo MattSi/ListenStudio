@@ -2,7 +2,7 @@
 
 A desktop app for practising English listening and speaking. Drop in any audio or video file to transcribe it with Whisper, listen to it sentence by sentence, or write your own text, hear it read aloud and compare your pronunciation with the reference, sentence by sentence.
 
-> The user interface is in Chinese (中文); this README is in English.
+> The interface is available in English and Chinese (中文).
 
 ![Intensive listening: one sentence at a time, with the waveform](docs/listening.png)
 
