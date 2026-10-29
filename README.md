@@ -4,7 +4,11 @@ A desktop app for practising English listening and speaking. Drop in any audio o
 
 > The user interface is in Chinese (中文); this README is in English.
 
-<!-- Screenshots: add one per tab, e.g. docs/transcribe.png, docs/listening.png, docs/read-aloud.png -->
+![Intensive listening: one sentence at a time, with the waveform](docs/listening.png)
+
+| Transcribe | Read aloud |
+|---|---|
+| ![Transcribe](docs/transcribe.png) | ![Read aloud](docs/read-aloud.png) |
 
 ## Features
 
